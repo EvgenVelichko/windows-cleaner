@@ -196,7 +196,7 @@ public sealed class CleanerUninstallJob
                 if (!String.IsNullOrEmpty(folder) && Directory.Exists(folder)) info.WorkingDirectory = folder;
                 using (Process process = Process.Start(info))
                 {
-                    if (process == null) throw new InvalidOperationException("Не удалось запустить деинсталлятор.");
+                    if (process == null) throw new InvalidOperationException("The uninstaller could not be started.");
                     result.Started = true;
                     process.WaitForExit();
                     result.ExitCode = process.ExitCode;
@@ -214,23 +214,100 @@ $script:PendingTask = $null
 $script:PendingKind = ''
 $script:AppRows = @()
 $script:SafeTargets = @()
+$script:LastCleanupRows = @()
+$script:LastDriveResult = $null
+$script:Language = 'en'
+$script:Texts = @{
+    ru = @{
+        language_label = 'Язык:'; app_title = 'Windows Cleaner — программы и диск'; header_title = 'Программы и место на диске'; subtitle = 'Удаляйте приложения штатно и находите, что занимает место'; drive_caption = 'Диск для анализа:'
+        drive_none = 'Доступные диски не найдены.'; drive_fail = 'Не удалось получить сведения о диске.'; drive_info = 'Свободно {0} из {1} на {2}'
+        tab_apps = 'Установленные программы'; tab_cleanup = 'Очистка'; tab_large = 'Большие папки'; tab_advice = 'Советы по папкам'
+        cleanup_refresh = 'Обновить оценку'; clean_selected = 'Очистить выбранную папку…'; bin_button = 'Очистить корзину этого диска…'; cleanup_type = 'Тип папки'; column_path = 'Путь'; available = 'Можно освободить'; last_access = 'Последний доступ (оценка)'; criterion = 'Критерий / файлы'
+        cleanup_note = 'Предлагаются старые файлы из временных папок и отчётов о сбоях. Время последнего доступа может быть неточным.'; scan_large = 'Сканировать диск на большие папки'; open_folder = 'Открыть выбранную папку'; large_folder = 'Папка'; size = 'Размер'; recommendation = 'Рекомендация'; large_note = 'Обычные папки приложение не удаляет. Если папка давно не открывалась, проверьте её содержимое вручную.'
+        refresh_apps = 'Обновить список'; search = 'Поиск:'; show = 'Показать:'; filter_all = 'Все программы'; filter_user = 'Пользовательские'; filter_all_users = 'Для всех пользователей'; windows_button = 'Store и Windows…'; uninstall_button = 'Удалить выбранные…'
+        col_name = 'Название'; col_scope = 'Установка'; col_source = 'Источник'; col_size = 'Размер*'; col_version = 'Версия'; col_publisher = 'Издатель'; col_location = 'Папка установки'
+        apps_note = 'Выберите одну или несколько программ и нажмите «Удалить выбранные». Будут по очереди запущены штатные деинсталляторы; записи без обычной команды и приложения Store открываются через Windows.'
+        app_count = 'Найдено: {0}; показано: {1}. Можно выбрать несколько программ. Размер — оценка из данных установщика, если он её указал.'
+        scope_user = 'Пользовательская'; scope_all = 'Для всех пользователей'; source_program = 'Обычная программа'; source_store = 'Microsoft Store'
+        cleanup_empty = 'На выбранном диске нет известных временных папок'; cleanup_hint = 'Проверьте вкладку «Большие папки»'; cleanup_hint_change = 'Смените диск или проверьте вкладку «Большие папки»'; cleanup_none = 'Не найдено известных временных папок на выбранном диске.'
+        cleanup_estimating = 'Подсчитываю старые файлы во временных папках…'; drive_scanning = 'Сканирую {0}. На большом диске это может занять несколько минут…'; cleanup_done = 'Оценка временных файлов обновлена.'; drive_done = 'Сканирование диска завершено.'; scan_error = 'Ошибка сканирования: {0}'
+        app_loading = 'Загружаю каталог установленных программ…'; app_loaded = 'Каталог программ готов. Выберите приложение для просмотра или удаления.'; app_refreshing = 'Загружаю список зарегистрированных программ…'; app_refreshed = 'Список программ обновлён.'
+        no_targets = 'нет данных'; today = 'сегодня'; days_ago = '{0} дн. назад'; months_ago = '{0} мес. назад'; years_ago = '{0} г. назад'; bytes = 'Б'; kb = 'КБ'; mb = 'МБ'; gb = 'ГБ'
+        target_user_temp = 'Временные файлы пользователя'; target_crash = 'Старые отчёты о сбоях'; target_windows_temp = 'Временные файлы Windows'; age_24h = 'изменены >24 ч. назад, доступ >90 дн.'; age_30d = 'изменены >30 дн. назад, доступ >90 дн.'; age_limited = 'оценка ограничена; проверка не полная'; files_count = '{0}; файлов: {1}'
+        advice_temp_clean = 'Можно очистить старые файлы через вкладку «Очистка». Не удаляйте саму папку.'; advice_temp_empty = 'Это известная временная папка, но подходящих старых файлов нет. Саму папку оставьте.'
+        advice_system = 'Системные файлы или установленные программы. Не удаляйте вручную; используйте очистку Windows или удаление программы в «Параметры → Приложения».'; advice_shared = 'Общие данные приложений. Не удаляйте целиком; освободите место через приложение-владелец или удалите программу в настройках Windows.'
+        advice_personal = 'Папка с личными файлами. Просмотрите содержимое и удаляйте только ненужные файлы вручную; не удаляйте папку целиком.'; advice_cache = 'Похоже на кэш приложения. Закройте приложение и очистите кэш в его настройках; не удаляйте папку профиля целиком.'; advice_appdata = 'Данные и настройки приложений. Не удаляйте вручную; удаляйте программы через настройки Windows.'
+        advice_profile = 'Профиль пользователя может содержать личные файлы и настройки. Проверьте содержимое; не удаляйте целиком.'; advice_service = 'Служебная папка Windows. Не изменяйте вручную; корзину очищайте кнопкой на вкладке «Очистка».'; advice_old = 'Последний доступ выглядит старым. Сначала откройте папку и проверьте файлы; приложение не удаляет её автоматически.'; advice_unknown = 'Назначение неизвестно. Проверьте содержимое и программу-владельца; не удаляйте папку целиком.'
+        folders_none = 'Папки не найдены'; large_scan_limited = 'Сканирование остановлено после {0:N0} элементов; размеры могут быть неполными. Время доступа Windows может быть отключено и служит только ориентиром.'; large_scan_done = 'Найдено папок верхнего уровня: {0}. Время доступа Windows может быть отключено и служит только ориентиром.'
+        advice_heading = 'КАК ПОНЯТЬ, ЧТО МОЖНО УДАЛИТЬ'; advice_safe = 'МОЖНО ОЧИЩАТЬ ПОСЛЕ ПРОВЕРКИ'; advice_temp_bullet = '• Временные файлы пользователя и Windows: используйте вкладку «Очистка». Приложение выберет только старые файлы, сама папка останется.'; advice_crash_bullet = '• Старые отчёты о сбоях: можно убрать, если они не нужны для диагностики; приложение предлагает только старые и давно не открывавшиеся файлы.'; advice_bin_bullet = '• Корзина: сначала убедитесь, что там нет нужных файлов. Очистка корзины необратима.'; advice_cache_bullet = '• Кэш браузера и приложений: очищайте через настройки самого браузера или приложения, предварительно закрыв его. Не удаляйте целиком профиль браузера.'
+        advice_unsafe = 'НЕ УДАЛЯЙТЕ ВРУЧНУЮ ЦЕЛИКОМ'; advice_windows_bullet = '• C:\Windows, включая WinSxS, Installer и System32: используйте «Параметры → Система → Память → Временные файлы» или штатную очистку Windows.'; advice_programs_bullet = '• Program Files, Program Files (x86), ProgramData и папки приложений: удаляйте приложения через «Параметры → Приложения → Установленные приложения». Удаление папки может повредить программу и оставить её запись в системе.'; advice_personal_bullet = '• Документы, Рабочий стол, Загрузки, Изображения, Видео и Музыка: это могут быть личные файлы. Просмотрите их и удаляйте только то, что вам точно не нужно.'; advice_appdata_bullet = '• AppData и неизвестные папки: там хранятся настройки и данные программ. Сначала выясните, какой программе принадлежит папка.'; advice_service_bullet = '• System Volume Information и другие служебные папки Windows: не изменяйте их вручную.'; advice_footer = 'СОВЕТ В СПИСКЕ БОЛЬШИХ ПАПОК — ОРИЕНТИР, А НЕ ГАРАНТИЯ. Дата последнего доступа может быть неточной, если Windows не обновляет эти метаданные. Если сомневаетесь, откройте папку и проверьте содержимое.'
+        uninstall_progress = 'Удаление {0} из {1}: {2}. Дождитесь завершения деинсталлятора.'; uninstall_done = 'Удаление завершено. Успешно: {0}; с ошибкой/отменой: {1}. Обновите список, чтобы проверить результат.'; uninstall_failed = 'Некоторые деинсталляторы завершились с ошибкой или были отменены:'; result_title = 'Результат удаления'; exit_code = '{0}: код завершения {1}'
+        no_app_selected = 'Сначала выберите программу. Для нескольких программ используйте Ctrl или Shift при выборе.'; nothing_selected = 'Ничего не выбрано'; no_uninstaller = 'У выбранных записей нет обычной команды деинсталлятора. Для Store и других таких программ откройте удаление Windows.'; open_installed = 'Открыть «Установленные приложения» Windows?'; windows_uninstall = 'Удаление через Windows'; open_settings_fail = 'Не удалось открыть управление программами Windows.'
+        uninstall_summary = 'Будут по очереди открыты штатные деинсталляторы ({0}):'; unsupported = 'Не запустятся из этого списка: {0}. Для них используйте кнопку «Store и Windows…».'; more = '… и ещё {0}'; uninstall_question = 'Каждый установщик может задавать свои вопросы. Продолжить?'; confirm_uninstall = 'Подтвердите удаление'; start_uninstall = 'Запускаю деинсталляторы по очереди: {0} программ…'
+        no_cleanup_selection = 'Сначала выберите известную временную папку в списке.'; confirm_cleanup = 'Подтвердите очистку'; clean_question = 'Удалить около {0} из папки «{1}»? Только если файлы достаточно давно не изменялись и не открывались.'; skip_locked = 'Занятые файлы и ссылки на другие папки будут пропущены.'; clean_done = 'Удалено {0} файлов, освобождено около {1}; пропущено: {2}.'; clean_fail = 'Не удалось очистить папку: {0}'
+        recycle_question = 'Очистить корзину диска {0}? Восстановить удалённые оттуда файлы будет нельзя.'; confirm_recycle = 'Подтвердите очистку корзины'; recycle_done = 'Корзина диска {0} очищена.'; recycle_fail = 'Не удалось очистить корзину: {0}'
+        clean_begin = 'Предлагаются старые временные файлы…'; no_drives = 'Нет доступных локальных дисков.'; path_not_allowed = 'Эта папка не входит в список разрешённых временных папок.'
+    }
+    en = @{
+        language_label = 'Language:'; app_title = 'Windows Cleaner — apps and storage'; header_title = 'Apps and disk space'; subtitle = 'Uninstall apps with their own uninstallers and find what uses your disk'; drive_caption = 'Drive to scan:'
+        drive_none = 'No available drives were found.'; drive_fail = 'Could not read drive information.'; drive_info = '{0} free of {1} on {2}'
+        tab_apps = 'Installed apps'; tab_cleanup = 'Cleanup'; tab_large = 'Large folders'; tab_advice = 'Folder advice'
+        cleanup_refresh = 'Refresh estimate'; clean_selected = 'Clean selected folder…'; bin_button = 'Empty this drive’s Recycle Bin…'; cleanup_type = 'Folder type'; column_path = 'Path'; available = 'Can free'; last_access = 'Last access (estimate)'; criterion = 'Criteria / files'
+        cleanup_note = 'Old files in known temporary folders and crash reports are suggested. Windows last-access timestamps may be inaccurate.'; scan_large = 'Scan drive for large folders'; open_folder = 'Open selected folder'; large_folder = 'Folder'; size = 'Size'; recommendation = 'Recommendation'; large_note = 'The app does not delete regular folders. If a folder has not been accessed recently, inspect its contents first.'
+        refresh_apps = 'Refresh list'; search = 'Search:'; show = 'Show:'; filter_all = 'All apps'; filter_user = 'Current user'; filter_all_users = 'All users'; windows_button = 'Store / Windows…'; uninstall_button = 'Uninstall selected…'
+        col_name = 'Name'; col_scope = 'Installed for'; col_source = 'Source'; col_size = 'Size*'; col_version = 'Version'; col_publisher = 'Publisher'; col_location = 'Install folder'
+        apps_note = 'Select one or more apps and choose “Uninstall selected”. Their standard uninstallers will run one at a time; use Windows for Store apps and entries without a standard uninstall command.'
+        app_count = 'Found: {0}; shown: {1}. You can select multiple apps. Size is an installer estimate when available.'
+        scope_user = 'Current user'; scope_all = 'All users'; source_program = 'Desktop app'; source_store = 'Microsoft Store'
+        cleanup_empty = 'No known temporary folders were found on this drive'; cleanup_hint = 'See the Large folders tab'; cleanup_hint_change = 'Choose another drive or see Large folders'; cleanup_none = 'No known temporary folders were found on the selected drive.'
+        cleanup_estimating = 'Estimating old files in temporary folders…'; drive_scanning = 'Scanning {0}. Large drives may take a few minutes…'; cleanup_done = 'Temporary-file estimate refreshed.'; drive_done = 'Drive scan finished.'; scan_error = 'Scan error: {0}'
+        app_loading = 'Loading installed apps…'; app_loaded = 'App catalog is ready. Select an app to inspect or uninstall it.'; app_refreshing = 'Loading registered apps…'; app_refreshed = 'App list refreshed.'
+        no_targets = 'no data'; today = 'today'; days_ago = '{0} days ago'; months_ago = '{0} months ago'; years_ago = '{0} years ago'; bytes = 'B'; kb = 'KB'; mb = 'MB'; gb = 'GB'
+        target_user_temp = 'User temporary files'; target_crash = 'Old crash reports'; target_windows_temp = 'Windows temporary files'; age_24h = 'modified >24 hours ago, accessed >90 days ago'; age_30d = 'modified >30 days ago, accessed >90 days ago'; age_limited = 'estimate limited; scan incomplete'; files_count = '{0}; files: {1}'
+        advice_temp_clean = 'Old files can be cleaned from the Cleanup tab. Keep the folder itself.'; advice_temp_empty = 'This is a known temporary folder, but no files meet the age criteria. Keep the folder itself.'
+        advice_system = 'Windows system files or installed apps. Do not delete them manually; use Windows storage cleanup or uninstall apps in Settings.'; advice_shared = 'Shared app data. Do not delete the whole folder; use the owning app or uninstall it through Windows Settings.'
+        advice_personal = 'This may contain personal files. Review the contents and remove only files you no longer need; keep the folder itself.'; advice_cache = 'This may be an app cache. Close the app and clear its cache in the app settings; do not remove the whole profile folder.'; advice_appdata = 'App settings and data are stored here. Do not delete this folder manually; uninstall apps through Windows.'
+        advice_profile = 'A user profile can contain personal files and app settings. Inspect its contents; do not delete the entire folder.'; advice_service = 'Windows service folder. Do not modify it manually; empty the Recycle Bin using the Cleanup tab.'; advice_old = 'The last-access date looks old. Open the folder and inspect its files first; the app will not delete it automatically.'; advice_unknown = 'The purpose is unknown. Inspect the contents and identify the owning app; do not delete the whole folder.'
+        folders_none = 'No folders found'; large_scan_limited = 'Scan stopped after {0:N0} entries; sizes may be incomplete. Windows may disable last-access timestamps, so treat them as estimates.'; large_scan_done = 'Top-level folders found: {0}. Windows may disable last-access timestamps, so treat them as estimates.'
+        advice_heading = 'HOW TO DECIDE WHAT TO REMOVE'; advice_safe = 'CLEAN THESE ONLY AFTER REVIEW'; advice_temp_bullet = '• User and Windows temporary files: use the Cleanup tab. The app selects only old files and keeps the folder itself.'; advice_crash_bullet = '• Old crash reports: remove them if you no longer need them for diagnostics; the app selects only old, rarely accessed files.'; advice_bin_bullet = '• Recycle Bin: check that it contains no needed files first. Emptying it cannot be undone.'; advice_cache_bullet = '• Browser and app caches: clear these in the browser or app settings after closing it. Do not delete the whole browser profile.'
+        advice_unsafe = 'DO NOT DELETE THESE FOLDERS MANUALLY'; advice_windows_bullet = '• C:\Windows, including WinSxS, Installer, and System32: use Settings → System → Storage → Temporary files or Windows cleanup tools.'; advice_programs_bullet = '• Program Files, Program Files (x86), ProgramData, and app folders: uninstall apps through Settings → Apps → Installed apps. Deleting folders can break apps and leave stale entries.'; advice_personal_bullet = '• Documents, Desktop, Downloads, Pictures, Videos, and Music may contain personal files. Review them and remove only what you no longer need.'; advice_appdata_bullet = '• AppData and unknown folders contain app settings and data. Identify the owning app before removing anything.'; advice_service_bullet = '• System Volume Information and other Windows service folders: do not change them manually.'; advice_footer = 'LARGE-FOLDER ADVICE IS A GUIDE, NOT A GUARANTEE. Last-access dates may be inaccurate when Windows does not update them. If unsure, open the folder and inspect its contents.'
+        uninstall_progress = 'Uninstalling {0} of {1}: {2}. Wait for the uninstaller to finish.'; uninstall_done = 'Uninstall queue finished. Successful: {0}; errors or cancellations: {1}. Refresh the list to check the result.'; uninstall_failed = 'Some uninstallers returned an error or were canceled:'; result_title = 'Uninstall result'; exit_code = '{0}: exit code {1}'
+        no_app_selected = 'Select an app first. Use Ctrl or Shift to select multiple apps.'; nothing_selected = 'Nothing selected'; no_uninstaller = 'These entries do not have a standard uninstall command. Open Windows Settings for Store apps and other entries.'; open_installed = 'Open Windows Installed apps?'; windows_uninstall = 'Uninstall through Windows'; open_settings_fail = 'Could not open Windows app management.'
+        uninstall_summary = 'The following standard uninstallers will open one at a time ({0}):'; unsupported = 'Not supported here: {0}. Use “Store / Windows…” for these entries.'; more = '… and {0} more'; uninstall_question = 'Each uninstaller may ask its own questions. Continue?'; confirm_uninstall = 'Confirm uninstall'; start_uninstall = 'Starting uninstallers one at a time: {0} apps…'
+        no_cleanup_selection = 'Select a known temporary folder from the list first.'; confirm_cleanup = 'Confirm cleanup'; clean_question = 'Remove about {0} from “{1}”? Only files that have not been modified or accessed for a long time are eligible.'; skip_locked = 'Files in use and links to other folders will be skipped.'; clean_done = 'Removed {0} files, freed about {1}; skipped: {2}.'; clean_fail = 'Could not clean the folder: {0}'
+        recycle_question = 'Empty the Recycle Bin on drive {0}? Files removed from it cannot be restored.'; confirm_recycle = 'Confirm emptying Recycle Bin'; recycle_done = 'Recycle Bin emptied on drive {0}.'; recycle_fail = 'Could not empty the Recycle Bin: {0}'
+        clean_begin = 'Suggesting old temporary files…'; no_drives = 'No local drives are available.'; path_not_allowed = 'This folder is not an approved temporary cleanup target.'
+    }
+}
+
+function T([string]$Key) {
+    return [string]$script:Texts[$script:Language][$Key]
+}
+
+function Get-AdviceText {
+    return @(
+        (T 'advice_heading'), '', (T 'advice_safe'), (T 'advice_temp_bullet'), (T 'advice_crash_bullet'), (T 'advice_bin_bullet'), (T 'advice_cache_bullet'),
+        '', (T 'advice_unsafe'), (T 'advice_windows_bullet'), (T 'advice_programs_bullet'), (T 'advice_personal_bullet'), (T 'advice_appdata_bullet'), (T 'advice_service_bullet'), '', (T 'advice_footer')
+    ) -join [Environment]::NewLine
+}
 
 function Format-Bytes([long]$Bytes) {
-    if ($Bytes -ge 1GB) { return ('{0:N2} ГБ' -f ($Bytes / 1GB)) }
-    if ($Bytes -ge 1MB) { return ('{0:N0} МБ' -f ($Bytes / 1MB)) }
-    if ($Bytes -ge 1KB) { return ('{0:N0} КБ' -f ($Bytes / 1KB)) }
-    return ('{0} Б' -f $Bytes)
+    if ($Bytes -ge 1GB) { return ('{0:N2} {1}' -f ($Bytes / 1GB), (T 'gb')) }
+    if ($Bytes -ge 1MB) { return ('{0:N0} {1}' -f ($Bytes / 1MB), (T 'mb')) }
+    if ($Bytes -ge 1KB) { return ('{0:N0} {1}' -f ($Bytes / 1KB), (T 'kb')) }
+    return ('{0} {1}' -f $Bytes, (T 'bytes'))
 }
 
 function Format-AccessTime($UtcTime) {
-    if ($null -eq $UtcTime -or $UtcTime -eq [DateTime]::MinValue) { return 'нет данных' }
+    if ($null -eq $UtcTime -or $UtcTime -eq [DateTime]::MinValue) { return (T 'no_targets') }
     $localTime = ([DateTime]$UtcTime).ToLocalTime()
     $age = [DateTime]::Now - $localTime
-    if ($age.TotalDays -lt 1) { $ago = 'сегодня' }
-    elseif ($age.TotalDays -lt 30) { $ago = ('{0} дн. назад' -f [int]$age.TotalDays) }
-    elseif ($age.TotalDays -lt 365) { $ago = ('{0} мес. назад' -f [int]($age.TotalDays / 30)) }
-    else { $ago = ('{0} г. назад' -f [int]($age.TotalDays / 365)) }
-    return ('{0:dd.MM.yyyy HH:mm} ({1})' -f $localTime, $ago)
+    if ($age.TotalDays -lt 1) { $ago = T 'today' }
+    elseif ($age.TotalDays -lt 30) { $ago = (T 'days_ago') -f [int]$age.TotalDays }
+    elseif ($age.TotalDays -lt 365) { $ago = (T 'months_ago') -f [int]($age.TotalDays / 30) }
+    else { $ago = (T 'years_ago') -f [int]($age.TotalDays / 365) }
+    $dateFormat = if ($script:Language -eq 'en') { 'yyyy-MM-dd HH:mm' } else { 'dd.MM.yyyy HH:mm' }
+    return ('{0} ({1})' -f $localTime.ToString($dateFormat), $ago)
 }
 
 function Get-SelectedDriveRoot {
@@ -238,13 +315,34 @@ function Get-SelectedDriveRoot {
     return [string]$driveCombo.SelectedItem.Root
 }
 
+function Refresh-DriveChoices {
+    $previousRoot = Get-SelectedDriveRoot
+    $driveCombo.BeginUpdate()
+    $driveCombo.Items.Clear()
+    $selectedIndex = -1
+    foreach ($drive in [System.IO.DriveInfo]::GetDrives()) {
+        try {
+            if (-not $drive.IsReady -or $drive.DriveType -notin @([System.IO.DriveType]::Fixed, [System.IO.DriveType]::Removable)) { continue }
+            $display = (T 'drive_info') -f (Format-Bytes $drive.AvailableFreeSpace), (Format-Bytes $drive.TotalSize), $drive.Name
+            [void]$driveCombo.Items.Add([pscustomobject]@{ Display = $display; Root = $drive.RootDirectory.FullName })
+            if ($previousRoot -and $drive.RootDirectory.FullName -ieq $previousRoot) { $selectedIndex = $driveCombo.Items.Count - 1 }
+        } catch { }
+    }
+    if ($driveCombo.Items.Count -gt 0) {
+        if ($selectedIndex -lt 0) { $selectedIndex = 0 }
+        $driveCombo.SelectedIndex = $selectedIndex
+    }
+    $driveCombo.EndUpdate()
+    if ($driveCombo.Items.Count -eq 0) { $driveInfoLabel.Text = T 'no_drives' } else { Refresh-DriveState }
+}
+
 function Get-SafeTargetsForDrive([string]$Root) {
     $candidates = @()
     if ($env:LOCALAPPDATA) {
-        $candidates += [pscustomobject]@{ Name = 'Временные файлы пользователя'; Path = (Join-Path $env:LOCALAPPDATA 'Temp'); AgeHours = 24; AgeLabel = 'изменены >24 ч. назад, доступ >90 дн.'; AccessDays = 90 }
-        $candidates += [pscustomobject]@{ Name = 'Старые отчёты о сбоях'; Path = (Join-Path $env:LOCALAPPDATA 'CrashDumps'); AgeHours = 720; AgeLabel = 'изменены >30 дн. назад, доступ >90 дн.'; AccessDays = 90 }
+        $candidates += [pscustomobject]@{ NameKey = 'target_user_temp'; Path = (Join-Path $env:LOCALAPPDATA 'Temp'); AgeHours = 24; AgeKey = 'age_24h'; AccessDays = 90 }
+        $candidates += [pscustomobject]@{ NameKey = 'target_crash'; Path = (Join-Path $env:LOCALAPPDATA 'CrashDumps'); AgeHours = 720; AgeKey = 'age_30d'; AccessDays = 90 }
     }
-    if ($env:windir) { $candidates += [pscustomobject]@{ Name = 'Временные файлы Windows'; Path = (Join-Path $env:windir 'Temp'); AgeHours = 24; AgeLabel = 'изменены >24 ч. назад, доступ >90 дн.'; AccessDays = 90 } }
+    if ($env:windir) { $candidates += [pscustomobject]@{ NameKey = 'target_windows_temp'; Path = (Join-Path $env:windir 'Temp'); AgeHours = 24; AgeKey = 'age_24h'; AccessDays = 90 } }
     $seen = @{}
     $result = @()
     foreach ($candidate in $candidates) {
@@ -255,7 +353,7 @@ function Get-SafeTargetsForDrive([string]$Root) {
             if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
             if ($seen.ContainsKey($full)) { continue }
             $seen[$full] = $true
-            $result += [pscustomobject]@{ Name = $candidate.Name; Path = $full; AgeHours = $candidate.AgeHours; AgeLabel = $candidate.AgeLabel; AccessDays = $candidate.AccessDays }
+            $result += [pscustomobject]@{ Name = T $candidate.NameKey; NameKey = $candidate.NameKey; Path = $full; AgeHours = $candidate.AgeHours; AgeKey = $candidate.AgeKey; AgeLabel = T $candidate.AgeKey; AccessDays = $candidate.AccessDays }
         } catch { }
     }
     return $result
@@ -265,17 +363,17 @@ function Get-InstalledApps {
     $apps = New-Object 'System.Collections.Generic.List[object]'
     $seen = @{}
     $registrySources = @(
-        @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope = 'Пользовательская'; Source = 'Обычная программа' },
-        @{ Path = 'HKCU:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope = 'Пользовательская'; Source = 'Обычная программа' },
-        @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope = 'Для всех пользователей'; Source = 'Обычная программа' },
-        @{ Path = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope = 'Для всех пользователей'; Source = 'Обычная программа' }
+        @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope = 'user'; Source = 'program' },
+        @{ Path = 'HKCU:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope = 'user'; Source = 'program' },
+        @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope = 'all'; Source = 'program' },
+        @{ Path = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope = 'all'; Source = 'program' }
     )
     foreach ($source in $registrySources) {
         foreach ($app in (Get-ItemProperty -Path $source.Path -ErrorAction SilentlyContinue)) {
             $name = [string]$app.DisplayName
             if ([string]::IsNullOrWhiteSpace($name) -or $app.SystemComponent -eq 1) { continue }
             $installLocation = [string]$app.InstallLocation
-            if ($installLocation -and $env:USERPROFILE -and $installLocation.StartsWith($env:USERPROFILE, [StringComparison]::OrdinalIgnoreCase)) { $scope = 'Пользовательская' } else { $scope = $source.Scope }
+            if ($installLocation -and $env:USERPROFILE -and $installLocation.StartsWith($env:USERPROFILE, [StringComparison]::OrdinalIgnoreCase)) { $scope = 'user' } else { $scope = $source.Scope }
             $version = [string]$app.DisplayVersion
             $key = '{0}|{1}|{2}' -f $name, $version, $scope
             if ($seen.ContainsKey($key)) { continue }
@@ -291,10 +389,10 @@ function Get-InstalledApps {
             $name = [string]$package.Name
             if ([string]::IsNullOrWhiteSpace($name)) { continue }
             $version = [string]$package.Version
-            $key = '{0}|{1}|Microsoft Store' -f $name, $version
+            $key = '{0}|{1}|store' -f $name, $version
             if ($seen.ContainsKey($key)) { continue }
             $seen[$key] = $true
-            $apps.Add([pscustomobject]@{ Name = $name; Scope = 'Пользовательская'; Source = 'Microsoft Store'; Version = $version; Publisher = [string]$package.PublisherDisplayName; Location = [string]$package.InstallLocation; EstimatedBytes = 0L; UninstallCommand = '' })
+            $apps.Add([pscustomobject]@{ Name = $name; Scope = 'user'; Source = 'store'; Version = $version; Publisher = [string]$package.PublisherDisplayName; Location = [string]$package.InstallLocation; EstimatedBytes = 0L; UninstallCommand = '' })
         }
     } catch { }
     return @($apps | Sort-Object Name, Scope)
@@ -331,25 +429,27 @@ function Add-ListRow($List, [string[]]$Values, $Tag) {
 
 function Refresh-DriveState {
     $root = Get-SelectedDriveRoot
-    if (-not $root) { $driveInfoLabel.Text = 'Доступные диски не найдены.'; return }
+    if (-not $root) { $driveInfoLabel.Text = T 'drive_none'; return }
     try {
         $drive = [System.IO.DriveInfo]::new($root)
-        $driveInfoLabel.Text = ('Свободно {0} из {1} на {2}' -f (Format-Bytes $drive.AvailableFreeSpace), (Format-Bytes $drive.TotalSize), $root)
-    } catch { $driveInfoLabel.Text = 'Не удалось получить сведения о диске.' }
+        $driveInfoLabel.Text = (T 'drive_info') -f (Format-Bytes $drive.AvailableFreeSpace), (Format-Bytes $drive.TotalSize), $root
+    } catch { $driveInfoLabel.Text = T 'drive_fail' }
 }
 
 function Render-CleanupRows($Rows) {
+    $script:LastCleanupRows = @($Rows)
     $cleanupList.Items.Clear()
     foreach ($row in $Rows) {
         $target = $script:SafeTargets | Where-Object { $_.Path -ieq $row.Path } | Select-Object -First 1
         if (-not $target) { continue }
         $lastAccess = Format-AccessTime $row.LatestAccessUtc
-        $details = if ($row.Truncated) { 'оценка ограничена; проверка не полная' } else { $target.AgeLabel }
-        $tag = [pscustomobject]@{ Name = $target.Name; Path = $target.Path; AgeHours = $target.AgeHours; AccessDays = $target.AccessDays; EligibleBytes = $row.EligibleBytes; EligibleFiles = $row.EligibleFiles }
-        Add-ListRow $cleanupList @($target.Name, $target.Path, (Format-Bytes $row.EligibleBytes), $lastAccess, ('{0}; файлов: {1}' -f $details, $row.EligibleFiles)) $tag
+        $details = if ($row.Truncated) { T 'age_limited' } else { T $target.AgeKey }
+        $displayName = T $target.NameKey
+        $tag = [pscustomobject]@{ NameKey = $target.NameKey; Path = $target.Path; AgeHours = $target.AgeHours; AccessDays = $target.AccessDays; EligibleBytes = $row.EligibleBytes; EligibleFiles = $row.EligibleFiles }
+        Add-ListRow $cleanupList @($displayName, $target.Path, (Format-Bytes $row.EligibleBytes), $lastAccess, ((T 'files_count') -f $details, $row.EligibleFiles)) $tag
     }
     if ($cleanupList.Items.Count -eq 0) {
-        Add-ListRow $cleanupList @('На выбранном диске нет известных временных папок', '', '0 Б', '—', 'Проверьте вкладку «Большие папки»') $null
+        Add-ListRow $cleanupList @((T 'cleanup_empty'), '', ('0 {0}' -f (T 'bytes')), '—', (T 'cleanup_hint')) $null
     }
 }
 
@@ -364,41 +464,42 @@ function Test-PathWithin([string]$Path, [string]$Parent) {
 
 function Get-FolderAdvice($Row) {
     if ($Row.IsSafeTarget) {
-        if ($Row.EligibleBytes -gt 0) { return 'Можно очистить старые файлы через вкладку «Очистка». Не удаляйте саму папку.' }
-        return 'Это известная временная папка, но подходящих старых файлов нет. Саму папку оставьте.'
+        if ($Row.EligibleBytes -gt 0) { return T 'advice_temp_clean' }
+        return T 'advice_temp_empty'
     }
     $path = [string]$Row.Path
     $leaf = [System.IO.Path]::GetFileName($path.TrimEnd('\'))
     $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
     $usersRoot = if ($env:USERPROFILE) { [System.IO.Directory]::GetParent($env:USERPROFILE).FullName } else { $null }
     if ((Test-PathWithin $path $env:windir) -or (Test-PathWithin $path $env:ProgramFiles) -or (Test-PathWithin $path $programFilesX86)) {
-        return 'Системные файлы или установленные программы. Не удаляйте вручную; используйте очистку Windows или удаление программы в «Параметры → Приложения».'
+        return T 'advice_system'
     }
     if (Test-PathWithin $path $env:ProgramData) {
-        return 'Общие данные приложений. Не удаляйте целиком; освободите место через приложение-владелец или удалите программу в настройках Windows.'
+        return T 'advice_shared'
     }
     if ($leaf -in @('Downloads', 'Documents', 'Desktop', 'Pictures', 'Videos', 'Music')) {
-        return 'Папка с личными файлами. Просмотрите содержимое и удаляйте только ненужные файлы вручную; не удаляйте папку целиком.'
+        return T 'advice_personal'
     }
     if ($leaf -in @('Cache', 'Code Cache', 'GPUCache', 'cache2')) {
-        return 'Похоже на кэш приложения. Закройте приложение и очистите кэш в его настройках; не удаляйте папку профиля целиком.'
+        return T 'advice_cache'
     }
     if ($leaf -ieq 'AppData') {
-        return 'Данные и настройки приложений. Не удаляйте вручную; удаляйте программы через настройки Windows.'
+        return T 'advice_appdata'
     }
     if (Test-PathWithin $path $usersRoot) {
-        return 'Профиль пользователя может содержать личные файлы и настройки. Проверьте содержимое; не удаляйте целиком.'
+        return T 'advice_profile'
     }
     if ($path -match '\\(System Volume Information|\$Recycle\.Bin)$') {
-        return 'Служебная папка Windows. Не удаляйте вручную; корзину очищайте кнопкой на вкладке «Очистка».'
+        return T 'advice_service'
     }
     if ($Row.LatestAccessUtc -ne [DateTime]::MinValue -and $Row.LatestAccessUtc -lt [DateTime]::UtcNow.AddDays(-180)) {
-        return 'Последний доступ выглядит старым. Сначала откройте папку и проверьте файлы; приложение не удаляет её автоматически.'
+        return T 'advice_old'
     }
-    return 'Назначение неизвестно. Проверьте содержимое и программу-владельца; не удаляйте папку целиком.'
+    return T 'advice_unknown'
 }
 
 function Render-DriveScan($Result) {
+    $script:LastDriveResult = $Result
     $largeList.Items.Clear()
     $rows = @()
     foreach ($row in $Result.SafeTargets) { $rows += $row }
@@ -409,27 +510,34 @@ function Render-DriveScan($Result) {
         $advice = Get-FolderAdvice $row
         Add-ListRow $largeList @($row.Path, (Format-Bytes $row.TotalBytes), $access, $advice) $row
     }
-    if ($largeList.Items.Count -eq 0) { Add-ListRow $largeList @('Папки не найдены', '', '', '') $null }
+    if ($largeList.Items.Count -eq 0) { Add-ListRow $largeList @((T 'folders_none'), '', '', '') $null }
     if ($Result.Truncated) {
-        $largeNote.Text = ('Сканирование остановлено после {0:N0} элементов для ограничения времени; размеры могут быть неполными. Время доступа Windows может быть отключено и служит только ориентиром.' -f $Result.VisitedEntries)
+        $largeNote.Text = (T 'large_scan_limited') -f $Result.VisitedEntries
     } else {
-        $largeNote.Text = ('Найдено папок верхнего уровня: {0}. Время доступа Windows может быть отключено и служит только ориентиром.' -f $Result.Folders.Count)
+        $largeNote.Text = (T 'large_scan_done') -f $Result.Folders.Count
     }
 }
 
 function Render-Apps {
     $appsList.Items.Clear()
     $rows = $script:AppRows
-    if ($appsFilter.SelectedItem -eq 'Пользовательские') { $rows = $rows | Where-Object Scope -eq 'Пользовательская' }
-    elseif ($appsFilter.SelectedItem -eq 'Для всех пользователей') { $rows = $rows | Where-Object Scope -eq 'Для всех пользователей' }
+    if ($appsFilter.SelectedIndex -eq 1) { $rows = $rows | Where-Object Scope -eq 'user' }
+    elseif ($appsFilter.SelectedIndex -eq 2) { $rows = $rows | Where-Object Scope -eq 'all' }
     $query = $appsSearch.Text.Trim()
-    if ($query) { $rows = $rows | Where-Object { $_.Name -like "*$query*" -or $_.Publisher -like "*$query*" -or $_.Source -like "*$query*" -or $_.Version -like "*$query*" } }
+    if ($query) {
+        $rows = $rows | Where-Object {
+            $sourceText = if ($_.Source -eq 'store') { T 'source_store' } else { T 'source_program' }
+            $_.Name -like "*$query*" -or $_.Publisher -like "*$query*" -or $sourceText -like "*$query*" -or $_.Version -like "*$query*"
+        }
+    }
     $rows = $rows | Sort-Object @{ Expression = { if ($_.EstimatedBytes -gt 0) { 0 } else { 1 } } }, @{ Expression = 'EstimatedBytes'; Descending = $true }, Name
     foreach ($app in $rows) {
         $size = if ($app.EstimatedBytes -gt 0) { Format-Bytes $app.EstimatedBytes } else { '—' }
-        Add-ListRow $appsList @($app.Name, $app.Scope, $app.Source, $size, $app.Version, $app.Publisher, $app.Location) $app
+        $scopeText = if ($app.Scope -eq 'user') { T 'scope_user' } else { T 'scope_all' }
+        $sourceText = if ($app.Source -eq 'store') { T 'source_store' } else { T 'source_program' }
+        Add-ListRow $appsList @($app.Name, $scopeText, $sourceText, $size, $app.Version, $app.Publisher, $app.Location) $app
     }
-    $appsNote.Text = ('Найдено: {0}; показано: {1}. Можно выбрать несколько программ. Размер — оценка из данных установщика, если он её указал.' -f $script:AppRows.Count, $appsList.Items.Count)
+    $appsNote.Text = (T 'app_count') -f $script:AppRows.Count, $appsList.Items.Count
 }
 
 function Start-CleanupEstimate {
@@ -439,8 +547,9 @@ function Start-CleanupEstimate {
     $script:SafeTargets = @(Get-SafeTargetsForDrive $root)
     if ($script:SafeTargets.Count -eq 0) {
         $cleanupList.Items.Clear()
-        Add-ListRow $cleanupList @('На выбранном диске нет известных временных папок', '', '0 Б', '—', 'Смените диск или проверьте вкладку «Большие папки»') $null
-        $statusLabel.Text = 'Не найдено известных временных папок на выбранном диске.'
+        $script:LastCleanupRows = @()
+        Add-ListRow $cleanupList @((T 'cleanup_empty'), '', ('0 {0}' -f (T 'bytes')), '—', (T 'cleanup_hint_change')) $null
+        $statusLabel.Text = T 'cleanup_none'
         return
     }
     $paths = [string[]]@($script:SafeTargets | ForEach-Object { $_.Path })
@@ -452,7 +561,7 @@ function Start-CleanupEstimate {
     $cleanupRefreshButton.Enabled = $false
     $cleanSelectedButton.Enabled = $false
     $driveCombo.Enabled = $false
-    $statusLabel.Text = 'Подсчитываю старые файлы во временных папках…'
+    $statusLabel.Text = T 'cleanup_estimating'
     $script:ScanTimer.Start()
 }
 
@@ -469,13 +578,13 @@ function Start-DriveScan {
     $script:PendingKind = 'drive'
     $scanDriveButton.Enabled = $false
     $driveCombo.Enabled = $false
-    $statusLabel.Text = ('Сканирую {0}. На большом диске это может занять несколько минут…' -f $root)
+    $statusLabel.Text = (T 'drive_scanning') -f $root
     $script:ScanTimer.Start()
 }
 
 function Remove-SafeTargetFiles($Target) {
     $allowed = @(Get-SafeTargetsForDrive (Get-SelectedDriveRoot) | Where-Object { $_.Path -ieq $Target.Path })
-    if ($allowed.Count -ne 1) { throw 'Эта папка не входит в список разрешённых временных папок.' }
+    if ($allowed.Count -ne 1) { throw (T 'path_not_allowed') }
     $root = $allowed[0].Path
     $cutoff = [DateTime]::Now.AddHours(-$allowed[0].AgeHours)
     $accessCutoff = [DateTime]::Now.AddDays(-$allowed[0].AccessDays)
@@ -570,6 +679,25 @@ $driveInfoLabel.AutoSize = $true
 $driveInfoLabel.ForeColor = [System.Drawing.Color]::FromArgb(210, 222, 237)
 $driveInfoLabel.Location = [System.Drawing.Point]::new(530, 79)
 $form.Controls.Add($driveInfoLabel)
+
+$languageLabel = [System.Windows.Forms.Label]::new()
+$languageLabel.AutoSize = $true
+$languageLabel.ForeColor = [System.Drawing.Color]::FromArgb(225, 233, 243)
+$languageLabel.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 9)
+$languageLabel.Location = [System.Drawing.Point]::new(880, 22)
+$form.Controls.Add($languageLabel)
+
+$languageCombo = [System.Windows.Forms.ComboBox]::new()
+$languageCombo.DropDownStyle = 'DropDownList'
+$languageCombo.FlatStyle = 'Flat'
+$languageCombo.Location = [System.Drawing.Point]::new(946, 15)
+$languageCombo.Size = [System.Drawing.Size]::new(185, 29)
+$languageCombo.BackColor = [System.Drawing.Color]::White
+$languageCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+[void]$languageCombo.Items.Add('Русский')
+[void]$languageCombo.Items.Add('English')
+$languageCombo.SelectedIndex = 1
+$form.Controls.Add($languageCombo)
 
 $tabs = [System.Windows.Forms.TabControl]::new()
 $tabs.Location = [System.Drawing.Point]::new(18, 116)
@@ -845,6 +973,71 @@ $statusLabel.Font = [System.Drawing.Font]::new('Segoe UI', 9)
 $statusLabel.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
 $form.Controls.Add($statusLabel)
 
+function Set-UiLanguage([string]$Language) {
+    $script:Language = if ($Language -eq 'en') { 'en' } else { 'ru' }
+    $filterIndex = [Math]::Max(0, $appsFilter.SelectedIndex)
+    $form.Text = T 'app_title'
+    $title.Text = T 'header_title'
+    $subtitle.Text = T 'subtitle'
+    $driveCaption.Text = T 'drive_caption'
+    $languageLabel.Text = T 'language_label'
+    $appsTab.Text = T 'tab_apps'
+    $cleanupTab.Text = T 'tab_cleanup'
+    $largeTab.Text = T 'tab_large'
+    $adviceTab.Text = T 'tab_advice'
+    $cleanupRefreshButton.Text = T 'cleanup_refresh'
+    $cleanSelectedButton.Text = T 'clean_selected'
+    $binButton.Text = T 'bin_button'
+    $cleanupList.Columns[0].Text = T 'cleanup_type'
+    $cleanupList.Columns[1].Text = T 'column_path'
+    $cleanupList.Columns[2].Text = T 'available'
+    $cleanupList.Columns[3].Text = T 'last_access'
+    $cleanupList.Columns[4].Text = T 'criterion'
+    $cleanupNote.Text = T 'cleanup_note'
+    $scanDriveButton.Text = T 'scan_large'
+    $openFolderButton.Text = T 'open_folder'
+    $largeList.Columns[0].Text = T 'large_folder'
+    $largeList.Columns[1].Text = T 'size'
+    $largeList.Columns[2].Text = T 'last_access'
+    $largeList.Columns[3].Text = T 'recommendation'
+    $largeNote.Text = T 'large_note'
+    $appsRefreshButton.Text = T 'refresh_apps'
+    $appsSearchLabel.Text = T 'search'
+    $appsFilterLabel.Text = T 'show'
+    $appsFilter.BeginUpdate()
+    $appsFilter.Items.Clear()
+    [void]$appsFilter.Items.Add((T 'filter_all'))
+    [void]$appsFilter.Items.Add((T 'filter_user'))
+    [void]$appsFilter.Items.Add((T 'filter_all_users'))
+    $appsFilter.SelectedIndex = [Math]::Min($filterIndex, $appsFilter.Items.Count - 1)
+    $appsFilter.EndUpdate()
+    $manageAppsButton.Text = T 'windows_button'
+    $uninstallSelectedButton.Text = T 'uninstall_button'
+    $appsList.Columns[0].Text = T 'col_name'
+    $appsList.Columns[1].Text = T 'col_scope'
+    $appsList.Columns[2].Text = T 'col_source'
+    $appsList.Columns[3].Text = T 'col_size'
+    $appsList.Columns[4].Text = T 'col_version'
+    $appsList.Columns[5].Text = T 'col_publisher'
+    $appsList.Columns[6].Text = T 'col_location'
+    $appsNote.Text = T 'apps_note'
+    $adviceText.Text = Get-AdviceText
+    if ($languageCombo.SelectedIndex -ne $(if ($script:Language -eq 'en') { 1 } else { 0 })) {
+        $languageCombo.SelectedIndex = if ($script:Language -eq 'en') { 1 } else { 0 }
+    }
+    Refresh-DriveChoices
+    if ($script:AppRows.Count -gt 0) { Render-Apps }
+    if ($script:LastCleanupRows.Count -gt 0) { Render-CleanupRows $script:LastCleanupRows }
+    elseif ($cleanupList.Items.Count -eq 1 -and $null -eq $cleanupList.Items[0].Tag) {
+        $cleanupList.Items.Clear()
+        Add-ListRow $cleanupList @((T 'cleanup_empty'), '', ('0 {0}' -f (T 'bytes')), '—', (T 'cleanup_hint')) $null
+    }
+    if ($script:LastDriveResult) { Render-DriveScan $script:LastDriveResult }
+    if ($script:AppRows.Count -gt 0) { $statusLabel.Text = T 'app_loaded' }
+}
+
+Set-UiLanguage 'en'
+
 $script:UninstallJob = $null
 $script:UninstallTimer = [System.Windows.Forms.Timer]::new()
 $script:UninstallTimer.Interval = 400
@@ -852,7 +1045,7 @@ $script:UninstallTimer.Add_Tick({
     $job = $script:UninstallJob
     if ($null -eq $job) { $script:UninstallTimer.Stop(); return }
     if (-not $job.Worker.IsCompleted) {
-        if ($job.CurrentName) { $statusLabel.Text = ('Удаление {0} из {1}: {2}. Дождитесь завершения деинсталлятора.' -f ($job.CompletedCount + 1), $job.TotalCount, $job.CurrentName) }
+        if ($job.CurrentName) { $statusLabel.Text = (T 'uninstall_progress') -f ($job.CompletedCount + 1), $job.TotalCount, $job.CurrentName }
         return
     }
     $script:UninstallTimer.Stop()
@@ -860,13 +1053,13 @@ $script:UninstallTimer.Add_Tick({
     $appsRefreshButton.Enabled = $true
     $failed = @($job.Results | Where-Object { -not $_.Started -or $_.Error -or $_.ExitCode -ne 0 })
     $finished = $job.Results.Count - $failed.Count
-    $statusLabel.Text = ('Удаление завершено. Успешно: {0}; с ошибкой/отменой: {1}. Обновите список, чтобы проверить результат.' -f $finished, $failed.Count)
+    $statusLabel.Text = (T 'uninstall_done') -f $finished, $failed.Count
     $script:UninstallJob = $null
     if ($failed.Count -gt 0) {
         $details = @($failed | Select-Object -First 6 | ForEach-Object {
-            if ($_.Error) { '{0}: {1}' -f $_.Name, $_.Error } else { '{0}: код завершения {1}' -f $_.Name, $_.ExitCode }
+            if ($_.Error) { '{0}: {1}' -f $_.Name, $_.Error } else { (T 'exit_code') -f $_.Name, $_.ExitCode }
         }) -join [Environment]::NewLine
-        [void][System.Windows.Forms.MessageBox]::Show(('Некоторые деинсталляторы завершились с ошибкой или были отменены:' + [Environment]::NewLine + $details), 'Результат удаления', 'OK', 'Warning')
+        [void][System.Windows.Forms.MessageBox]::Show(((T 'uninstall_failed') + [Environment]::NewLine + $details), (T 'result_title'), 'OK', 'Warning')
     }
 })
 
@@ -880,15 +1073,15 @@ $script:ScanTimer.Add_Tick({
     if ($script:PendingKind -eq 'drive') { $scanDriveButton.Enabled = $true }
     $form.UseWaitCursor = $false
     if ($script:PendingTask.IsFaulted) {
-        $statusLabel.Text = ('Ошибка сканирования: {0}' -f $script:PendingTask.Exception.GetBaseException().Message)
+        $statusLabel.Text = (T 'scan_error') -f $script:PendingTask.Exception.GetBaseException().Message
         return
     }
     if ($script:PendingKind -eq 'cleanup') {
         Render-CleanupRows $script:PendingTask.Result
-        $statusLabel.Text = 'Оценка временных файлов обновлена.'
+        $statusLabel.Text = T 'cleanup_done'
     } elseif ($script:PendingKind -eq 'drive') {
         Render-DriveScan $script:PendingTask.Result
-        $statusLabel.Text = 'Сканирование диска завершено.'
+        $statusLabel.Text = T 'drive_done'
         $cleanupRefreshButton.Enabled = $true
     }
     $script:PendingKind = ''
@@ -901,32 +1094,33 @@ $driveCombo.Add_SelectedIndexChanged({
 $tabs.Add_SelectedIndexChanged({
     if ($tabs.SelectedTab -eq $cleanupTab -and $cleanupList.Items.Count -eq 0) { Start-CleanupEstimate }
     if ($tabs.SelectedTab -eq $appsTab -and $appsList.Items.Count -eq 0) {
-        $statusLabel.Text = 'Загружаю список программ…'
+        $statusLabel.Text = T 'app_loading'
         $form.Refresh()
         $script:AppRows = @(Get-InstalledApps)
         Render-Apps
-        $statusLabel.Text = 'Список программ загружен.'
+        $statusLabel.Text = T 'app_loaded'
     }
 })
+$languageCombo.Add_SelectedIndexChanged({ if ($languageCombo.SelectedIndex -eq 1) { Set-UiLanguage 'en' } else { Set-UiLanguage 'ru' } })
 $appsSearch.Add_TextChanged({ Render-Apps })
 $cleanupRefreshButton.Add_Click({ Start-CleanupEstimate })
 $scanDriveButton.Add_Click({ Start-DriveScan })
 
 $cleanSelectedButton.Add_Click({
     if ($cleanupList.SelectedItems.Count -eq 0 -or $null -eq $cleanupList.SelectedItems[0].Tag) {
-        [void][System.Windows.Forms.MessageBox]::Show('Сначала выберите известную временную папку в списке.', 'Ничего не выбрано', 'OK', 'Information')
+        [void][System.Windows.Forms.MessageBox]::Show((T 'no_cleanup_selection'), (T 'nothing_selected'), 'OK', 'Information')
         return
     }
     $target = $cleanupList.SelectedItems[0].Tag
     $answer = [System.Windows.Forms.MessageBox]::Show(
-        ('Удалить около {0} из папки «{1}»? Только если файлы достаточно давно не изменялись и не открывались.' -f (Format-Bytes $target.EligibleBytes), $target.Name) + [Environment]::NewLine + $target.Path + [Environment]::NewLine + [Environment]::NewLine + 'Занятые файлы и ссылки на другие папки будут пропущены.',
-        'Подтвердите очистку', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        ((T 'clean_question') -f (Format-Bytes $target.EligibleBytes), (T $target.NameKey)) + [Environment]::NewLine + $target.Path + [Environment]::NewLine + [Environment]::NewLine + (T 'skip_locked'),
+        (T 'confirm_cleanup'), [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
     if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
     try {
         $result = Remove-SafeTargetFiles $target
-        $statusLabel.Text = ('Удалено {0} файлов, освобождено около {1}; пропущено: {2}.' -f $result.Files, (Format-Bytes $result.Bytes), $result.Skipped)
+        $statusLabel.Text = (T 'clean_done') -f $result.Files, (Format-Bytes $result.Bytes), $result.Skipped
         Start-CleanupEstimate
-    } catch { $statusLabel.Text = ('Не удалось очистить папку: {0}' -f $_.Exception.Message) }
+    } catch { $statusLabel.Text = (T 'clean_fail') -f $_.Exception.Message }
 })
 
 $binButton.Add_Click({
@@ -934,11 +1128,11 @@ $binButton.Add_Click({
     if (-not $root) { return }
     $letter = $root.Substring(0, 1)
     $answer = [System.Windows.Forms.MessageBox]::Show(
-        ('Очистить корзину диска {0}? Восстановить удалённые оттуда файлы будет нельзя.' -f $root),
-        'Подтвердите очистку корзины', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        (T 'recycle_question') -f $root,
+        (T 'confirm_recycle'), [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
     if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-    try { Clear-RecycleBin -DriveLetter $letter -Force -ErrorAction Stop; $statusLabel.Text = ('Корзина диска {0} очищена.' -f $root) }
-    catch { $statusLabel.Text = ('Не удалось очистить корзину: {0}' -f $_.Exception.Message) }
+    try { Clear-RecycleBin -DriveLetter $letter -Force -ErrorAction Stop; $statusLabel.Text = (T 'recycle_done') -f $root }
+    catch { $statusLabel.Text = (T 'recycle_fail') -f $_.Exception.Message }
 })
 
 $openFolderButton.Add_Click({
@@ -949,17 +1143,17 @@ $openFolderButton.Add_Click({
 
 $appsRefreshButton.Add_Click({
     if ($script:UninstallJob) { return }
-    $statusLabel.Text = 'Загружаю список зарегистрированных программ…'
+    $statusLabel.Text = T 'app_refreshing'
     $form.Refresh()
     $script:AppRows = @(Get-InstalledApps)
     Render-Apps
-    $statusLabel.Text = 'Список программ обновлён.'
+    $statusLabel.Text = T 'app_refreshed'
 })
 $appsFilter.Add_SelectedIndexChanged({ Render-Apps })
 $uninstallSelectedButton.Add_Click({
     if ($script:UninstallJob) { return }
     if ($appsList.SelectedItems.Count -eq 0) {
-        [void][System.Windows.Forms.MessageBox]::Show('Сначала выберите программу. Для нескольких программ используйте Ctrl или Shift при выборе.', 'Ничего не выбрано', 'OK', 'Information')
+        [void][System.Windows.Forms.MessageBox]::Show((T 'no_app_selected'), (T 'nothing_selected'), 'OK', 'Information')
         return
     }
     $selectedApps = @($appsList.SelectedItems | ForEach-Object { $_.Tag } | Where-Object { $null -ne $_ })
@@ -971,17 +1165,17 @@ $uninstallSelectedButton.Add_Click({
         else { $unsupported += $app }
     }
     if ($launchable.Count -eq 0) {
-        $message = 'У выбранных записей нет обычной команды деинсталлятора. Для Store и других таких программ откройте удаление Windows.'
-        $answer = [System.Windows.Forms.MessageBox]::Show($message + [Environment]::NewLine + [Environment]::NewLine + 'Открыть «Установленные приложения» Windows?', 'Удаление через Windows', 'YesNo', 'Information')
-        if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { try { Start-Process 'ms-settings:appsfeatures' } catch { $statusLabel.Text = 'Не удалось открыть управление программами Windows.' } }
+        $message = T 'no_uninstaller'
+        $answer = [System.Windows.Forms.MessageBox]::Show($message + [Environment]::NewLine + [Environment]::NewLine + (T 'open_installed'), (T 'windows_uninstall'), 'YesNo', 'Information')
+        if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { try { Start-Process 'ms-settings:appsfeatures' } catch { $statusLabel.Text = T 'open_settings_fail' } }
         return
     }
     $preview = @($launchable | Select-Object -First 8 | ForEach-Object { '• ' + $_.App.Name }) -join [Environment]::NewLine
-    if ($launchable.Count -gt 8) { $preview += [Environment]::NewLine + ('… и ещё {0}' -f ($launchable.Count - 8)) }
-    $summary = 'Будут по очереди открыты штатные деинсталляторы ({0}):' -f $launchable.Count
-    if ($unsupported.Count -gt 0) { $summary += [Environment]::NewLine + ('Не запустятся из этого списка: {0}. Для них используйте кнопку «Store и Windows…».' -f $unsupported.Count) }
-    $summary += [Environment]::NewLine + [Environment]::NewLine + $preview + [Environment]::NewLine + [Environment]::NewLine + 'Каждый установщик может задавать свои вопросы. Продолжить?'
-    $answer = [System.Windows.Forms.MessageBox]::Show($summary, 'Подтвердите удаление', 'YesNo', 'Warning')
+    if ($launchable.Count -gt 8) { $preview += [Environment]::NewLine + ((T 'more') -f ($launchable.Count - 8)) }
+    $summary = (T 'uninstall_summary') -f $launchable.Count
+    if ($unsupported.Count -gt 0) { $summary += [Environment]::NewLine + ((T 'unsupported') -f $unsupported.Count) }
+    $summary += [Environment]::NewLine + [Environment]::NewLine + $preview + [Environment]::NewLine + [Environment]::NewLine + (T 'uninstall_question')
+    $answer = [System.Windows.Forms.MessageBox]::Show($summary, (T 'confirm_uninstall'), 'YesNo', 'Warning')
     if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
     $names = [string[]]@($launchable | ForEach-Object { $_.App.Name })
     $files = [string[]]@($launchable | ForEach-Object { $_.FileName })
@@ -990,32 +1184,22 @@ $uninstallSelectedButton.Add_Click({
     $script:UninstallJob.Start($names, $files, $arguments)
     $uninstallSelectedButton.Enabled = $false
     $appsRefreshButton.Enabled = $false
-    $statusLabel.Text = ('Запускаю деинсталляторы по очереди: {0} программ…' -f $names.Length)
+    $statusLabel.Text = (T 'start_uninstall') -f $names.Length
     $script:UninstallTimer.Start()
 })
 $manageAppsButton.Add_Click({
     try { Start-Process 'ms-settings:appsfeatures' }
-    catch { try { Start-Process appwiz.cpl } catch { $statusLabel.Text = 'Не удалось открыть управление программами Windows.' } }
+    catch { try { Start-Process appwiz.cpl } catch { $statusLabel.Text = T 'open_settings_fail' } }
 })
-
-foreach ($drive in [System.IO.DriveInfo]::GetDrives()) {
-    try {
-        if (-not $drive.IsReady -or $drive.DriveType -notin @([System.IO.DriveType]::Fixed, [System.IO.DriveType]::Removable)) { continue }
-        $display = ('{0}  свободно {1} из {2}' -f $drive.Name, (Format-Bytes $drive.AvailableFreeSpace), (Format-Bytes $drive.TotalSize))
-        [void]$driveCombo.Items.Add([pscustomobject]@{ Display = $display; Root = $drive.RootDirectory.FullName })
-    } catch { }
-}
-if ($driveCombo.Items.Count -gt 0) { $driveCombo.SelectedIndex = 0 }
-else { $driveInfoLabel.Text = 'Нет доступных локальных дисков.' }
 
 $form.Add_Shown({
     Refresh-DriveState
     if ($appsList.Items.Count -eq 0) {
-        $statusLabel.Text = 'Загружаю каталог установленных программ…'
+        $statusLabel.Text = T 'app_loading'
         $form.Refresh()
         $script:AppRows = @(Get-InstalledApps)
         Render-Apps
-        $statusLabel.Text = 'Каталог программ готов. Выберите приложение для просмотра или удаления.'
+        $statusLabel.Text = T 'app_loaded'
     }
     Start-CleanupEstimate
 })
