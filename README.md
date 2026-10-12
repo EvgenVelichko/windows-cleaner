@@ -16,6 +16,7 @@ The interface has a dark left sidebar for navigation and quick actions, a custom
 - Select multiple apps and launch their registered uninstallers sequentially after confirmation.
 - Open Windows Settings for Store apps or entries without a supported standard uninstall command.
 - On startup, estimate cleanup candidates and scan the selected drive for large folders, then calculate missing app-folder sizes in the background. Scanning runs sequentially to keep the interface responsive.
+- Show every detected top-level folder in the Large folders list, sorted by size; the previous 100-row display limit is removed.
 - Drive selection stays available during scans; requested follow-up scans run after the current scan.
 - Clean old files from known temporary folders and empty the Recycle Bin after confirmation.
 - Switch the interface between English and Russian in the sidebar.

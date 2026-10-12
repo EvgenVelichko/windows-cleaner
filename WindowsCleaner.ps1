@@ -626,7 +626,7 @@ function Render-DriveScan($Result) {
     $rows = @()
     foreach ($row in $Result.SafeTargets) { $rows += $row }
     foreach ($row in $Result.Folders) { $rows += $row }
-    $rows = $rows | Sort-Object TotalBytes -Descending | Select-Object -First 100
+    $rows = $rows | Sort-Object TotalBytes -Descending
     foreach ($row in $rows) {
         $access = Format-AccessTime $row.LatestAccessUtc
         $advice = Get-FolderAdvice $row
@@ -1429,36 +1429,48 @@ function New-ChoiceSelectorButton($Combo, [string]$Kind, [string]$Label) {
     $button.AccessibleRole = [System.Windows.Forms.AccessibleRole]::ComboBox
     $button.AccessibleName = $Label
     $button.Enabled = $Combo.Enabled
-    $choiceKind = $Kind
+    $button.Tag = [pscustomobject]@{ Combo = $Combo; Kind = $Kind }
     $menu = [System.Windows.Forms.ContextMenuStrip]::new()
     $menu.ShowCheckMargin = $false
     $menu.ShowImageMargin = $false
     $menu.BackColor = [System.Drawing.Color]::White
     $menu.ForeColor = [System.Drawing.Color]::FromArgb(35, 52, 76)
     $menu.Font = [System.Drawing.Font]::new('Segoe UI', 9.5)
+    $menu.Tag = $Combo
     $button.ContextMenuStrip = $menu
     $menu.Add_Opening({
-        $menu.Items.Clear()
-        for ($itemIndex = 0; $itemIndex -lt $Combo.Items.Count; $itemIndex++) {
-            $choice = $Combo.Items[$itemIndex]
+        param($sender, $eventArgs)
+        $sender.Items.Clear()
+        $comboBox = $sender.Tag
+        for ($itemIndex = 0; $itemIndex -lt $comboBox.Items.Count; $itemIndex++) {
+            $choice = $comboBox.Items[$itemIndex]
             $itemText = if ($choice -is [string]) { [string]$choice } else { [string]$choice.Display }
             $menuItem = [System.Windows.Forms.ToolStripMenuItem]::new($itemText)
-            if ($itemIndex -eq $Combo.SelectedIndex) { $menuItem.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 9.5) }
-            $selectedIndex = $itemIndex
-            $menuItem.Add_Click({ $Combo.SelectedIndex = $selectedIndex }.GetNewClosure())
-            [void]$menu.Items.Add($menuItem)
+            if ($itemIndex -eq $comboBox.SelectedIndex) { $menuItem.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 9.5) }
+            $menuItem.Tag = [int]$itemIndex
+            $menuItem.Add_Click({
+                param($itemSender, $clickArgs)
+                $targetCombo = $itemSender.Owner.Tag
+                if ($targetCombo -is [System.Windows.Forms.ComboBox] -and [int]$itemSender.Tag -ge 0 -and [int]$itemSender.Tag -lt $targetCombo.Items.Count) {
+                    $targetCombo.SelectedIndex = [int]$itemSender.Tag
+                }
+            })
+            [void]$sender.Items.Add($menuItem)
         }
-    }.GetNewClosure())
+    })
     $button.Add_Click({
-        if ($Combo.Items.Count -gt 0 -and $button.Enabled) { $menu.Show($button, [System.Drawing.Point]::new(0, $button.Height)) }
-    }.GetNewClosure())
+        param($sender, $eventArgs)
+        $comboBox = $sender.Tag.Combo
+        if ($comboBox.Items.Count -gt 0 -and $sender.Enabled) { $sender.ContextMenuStrip.Show($sender, [System.Drawing.Point]::new(0, $sender.Height)) }
+    })
     $button.Add_KeyDown({
         param($sender, $eventArgs)
-        if ($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::Down -and $Combo.Items.Count -gt 0) {
-            $menu.Show($sender, [System.Drawing.Point]::new(0, $sender.Height))
+        $comboBox = $sender.Tag.Combo
+        if ($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::Down -and $comboBox.Items.Count -gt 0) {
+            $sender.ContextMenuStrip.Show($sender, [System.Drawing.Point]::new(0, $sender.Height))
             $eventArgs.Handled = $true
         }
-    }.GetNewClosure())
+    })
     $button.Add_Paint({
         param($sender, $eventArgs)
         $graphics = $eventArgs.Graphics
@@ -1499,7 +1511,7 @@ function New-ChoiceSelectorButton($Combo, [string]$Kind, [string]$Label) {
         $iconPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
         $iconX = 11
         $iconY = [int](($sender.Height - 16) / 2)
-        if ($choiceKind -eq 'drive') {
+        if ($sender.Tag.Kind -eq 'drive') {
             $graphics.DrawRectangle($iconPen, $iconX, $iconY + 2, 18, 12)
             $graphics.DrawLine($iconPen, $iconX + 2, $iconY + 6, $iconX + 16, $iconY + 6)
             $driveLightBrush = [System.Drawing.SolidBrush]::new($iconColor)
@@ -1514,7 +1526,7 @@ function New-ChoiceSelectorButton($Combo, [string]$Kind, [string]$Label) {
         }
         $iconPen.Dispose()
 
-        $choice = $Combo.SelectedItem
+        $choice = $sender.Tag.Combo.SelectedItem
         if ($null -ne $choice) {
             $display = if ($choice -is [string]) { [string]$choice } else { [string]$choice.Display }
             $textBrush = [System.Drawing.SolidBrush]::new($contentColor)
@@ -1541,14 +1553,15 @@ function New-ChoiceSelectorButton($Combo, [string]$Kind, [string]$Label) {
             [System.Drawing.PointF]::new($centerX + 4, $centerY - 2)
         ))
         $chevronPen.Dispose()
-    }.GetNewClosure())
-    $button.Add_MouseEnter({ $button.Invalidate() }.GetNewClosure())
-    $button.Add_MouseLeave({ $button.Invalidate() }.GetNewClosure())
-    $button.Add_MouseMove({ $button.Invalidate() }.GetNewClosure())
-    $button.Add_Enter({ $button.Invalidate() }.GetNewClosure())
-    $button.Add_Leave({ $button.Invalidate() }.GetNewClosure())
-    $Combo.Add_SelectedIndexChanged({ $button.Invalidate() }.GetNewClosure())
-    $Combo.Add_EnabledChanged({ $button.Enabled = $Combo.Enabled; $button.Invalidate() }.GetNewClosure())
+    })
+    $button.Add_MouseEnter({ param($sender, $eventArgs) $sender.Invalidate() })
+    $button.Add_MouseLeave({ param($sender, $eventArgs) $sender.Invalidate() })
+    $button.Add_MouseMove({ param($sender, $eventArgs) $sender.Invalidate() })
+    $button.Add_Enter({ param($sender, $eventArgs) $sender.Invalidate() })
+    $button.Add_Leave({ param($sender, $eventArgs) $sender.Invalidate() })
+    $Combo.Tag = $button
+    $Combo.Add_SelectedIndexChanged({ param($sender, $eventArgs) $sender.Tag.Invalidate() })
+    $Combo.Add_EnabledChanged({ param($sender, $eventArgs) $sender.Tag.Enabled = $sender.Enabled; $sender.Tag.Invalidate() })
     $Combo.Visible = $false
     return $button
 }

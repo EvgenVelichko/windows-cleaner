@@ -23,4 +23,4 @@ Invoke-PS2EXE `
     -title 'Windows Cleaner' `
     -description 'Installed app manager and disk cleanup for Windows' `
     -product 'Windows Cleaner' `
-    -version '1.0.4.0'
+    -version '1.0.5.0'
