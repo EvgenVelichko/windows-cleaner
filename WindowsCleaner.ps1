@@ -219,7 +219,7 @@ $script:LastDriveResult = $null
 $script:Language = 'en'
 $script:Texts = @{
     ru = @{
-        language_label = 'Язык:'; app_title = 'Windows Cleaner — программы и диск'; header_title = 'Программы и место на диске'; subtitle = 'Удаляйте приложения штатно и находите, что занимает место'; drive_caption = 'Диск для анализа:'
+        language_label = 'Язык'; app_title = 'Windows Cleaner — программы и диск'; header_title = 'Программы и место на диске'; subtitle = 'Удаляйте приложения штатно и находите, что занимает место'; drive_caption = 'Диск для анализа:'; sidebar_tagline = 'Чистка и управление программами'; nav_section = 'РАЗДЕЛЫ'; action_section = 'БЫСТРЫЕ ДЕЙСТВИЯ'; drive_section = 'ДИСК ДЛЯ АНАЛИЗА'
         drive_none = 'Доступные диски не найдены.'; drive_fail = 'Не удалось получить сведения о диске.'; drive_info = 'Свободно {0} из {1} на {2}'
         tab_apps = 'Установленные программы'; tab_cleanup = 'Очистка'; tab_large = 'Большие папки'; tab_advice = 'Советы по папкам'
         cleanup_refresh = 'Обновить оценку'; clean_selected = 'Очистить выбранную папку…'; bin_button = 'Очистить корзину этого диска…'; cleanup_type = 'Тип папки'; column_path = 'Путь'; available = 'Можно освободить'; last_access = 'Последний доступ (оценка)'; criterion = 'Критерий / файлы'
@@ -249,7 +249,7 @@ $script:Texts = @{
         clean_begin = 'Предлагаются старые временные файлы…'; no_drives = 'Нет доступных локальных дисков.'; path_not_allowed = 'Эта папка не входит в список разрешённых временных папок.'
     }
     en = @{
-        language_label = 'Language:'; app_title = 'Windows Cleaner — apps and storage'; header_title = 'Apps and disk space'; subtitle = 'Uninstall apps with their own uninstallers and find what uses your disk'; drive_caption = 'Drive to scan:'
+        language_label = 'Language'; app_title = 'Windows Cleaner — apps and storage'; header_title = 'Apps and disk space'; subtitle = 'Uninstall apps with their own uninstallers and find what uses your disk'; drive_caption = 'Drive to scan:'; sidebar_tagline = 'PC cleanup and app manager'; nav_section = 'WORKSPACE'; action_section = 'QUICK ACTIONS'; drive_section = 'SCAN DRIVE'
         drive_none = 'No available drives were found.'; drive_fail = 'Could not read drive information.'; drive_info = '{0} free of {1} on {2}'
         tab_apps = 'Installed apps'; tab_cleanup = 'Cleanup'; tab_large = 'Large folders'; tab_advice = 'Folder advice'
         cleanup_refresh = 'Refresh estimate'; clean_selected = 'Clean selected folder…'; bin_button = 'Empty this drive''s Recycle Bin…'; cleanup_type = 'Folder type'; column_path = 'Path'; available = 'Can free'; last_access = 'Last access (estimate)'; criterion = 'Criteria / files'
@@ -323,7 +323,7 @@ function Refresh-DriveChoices {
     foreach ($drive in [System.IO.DriveInfo]::GetDrives()) {
         try {
             if (-not $drive.IsReady -or $drive.DriveType -notin @([System.IO.DriveType]::Fixed, [System.IO.DriveType]::Removable)) { continue }
-            $display = (T 'drive_info') -f (Format-Bytes $drive.AvailableFreeSpace), (Format-Bytes $drive.TotalSize), $drive.Name
+            $display = '{0}  ·  {1}' -f $drive.Name, (Format-Bytes $drive.TotalSize)
             [void]$driveCombo.Items.Add([pscustomobject]@{ Display = $display; Root = $drive.RootDirectory.FullName })
             if ($previousRoot -and $drive.RootDirectory.FullName -ieq $previousRoot) { $selectedIndex = $driveCombo.Items.Count - 1 }
         } catch { }
@@ -359,6 +359,54 @@ function Get-SafeTargetsForDrive([string]$Root) {
     return $result
 }
 
+function Resolve-AppIconPath([string]$DisplayIcon, [string]$InstallLocation, [string]$UninstallCommand, [bool]$IsStore) {
+    $candidates = New-Object 'System.Collections.Generic.List[string]'
+    if (-not [string]::IsNullOrWhiteSpace($DisplayIcon)) {
+        $value = [Environment]::ExpandEnvironmentVariables($DisplayIcon.Trim())
+        if ($value -match '^\s*"(?<path>[^"]+)"') { $value = $Matches.path }
+        else { $value = $value -replace ',\s*-?\d+\s*$', '' }
+        $value = $value.Trim('"')
+        if (-not [string]::IsNullOrWhiteSpace($value)) { $candidates.Add($value) }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($UninstallCommand)) {
+        $command = [Environment]::ExpandEnvironmentVariables($UninstallCommand.Trim())
+        if ($command -match '^\s*"(?<path>[^"]+\.exe)"') { $candidates.Add($Matches.path) }
+        elseif ($command -match '^\s*(?<path>.+?\.exe)(?:\s|$)') { $candidates.Add($Matches.path.Trim()) }
+    }
+    if ($IsStore -and -not [string]::IsNullOrWhiteSpace($InstallLocation)) {
+        $location = $InstallLocation
+        foreach ($relative in @('Assets\StoreLogo.png','Assets\Square44x44Logo.png','Assets\Square44x44Logo.scale-100.png','Assets\Logo.png','StoreLogo.png')) {
+            $candidates.Add((Join-Path $location $relative))
+        }
+        $manifestPath = Join-Path $location 'AppxManifest.xml'
+        if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+            try {
+                [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop
+                foreach ($element in $manifest.SelectNodes("//*[local-name()='VisualElements']")) {
+                    foreach ($attribute in @('Square44x44Logo','Square150x150Logo','Logo')) {
+                        $logo = [string]$element.GetAttribute($attribute)
+                        if ($logo) {
+                            $candidates.Add((Join-Path $location $logo))
+                            $candidates.Add((Join-Path $location ($logo -replace '\.png$', '.scale-100.png')))
+                        }
+                    }
+                }
+            } catch { }
+        }
+    }
+    foreach ($candidate in $candidates) {
+        try {
+            $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
+            if ([System.IO.Path]::IsPathRooted($expanded) -and (Test-Path -LiteralPath $expanded -PathType Leaf)) { return $expanded }
+            if ($InstallLocation -and -not [System.IO.Path]::IsPathRooted($expanded)) {
+                $relativePath = Join-Path $InstallLocation $expanded
+                if (Test-Path -LiteralPath $relativePath -PathType Leaf) { return $relativePath }
+            }
+        } catch { }
+    }
+    return ''
+}
+
 function Get-InstalledApps {
     $apps = New-Object 'System.Collections.Generic.List[object]'
     $seen = @{}
@@ -380,7 +428,9 @@ function Get-InstalledApps {
             $seen[$key] = $true
             $estimatedBytes = 0L
             if ($app.EstimatedSize) { try { $estimatedBytes = [long]$app.EstimatedSize * 1KB } catch { } }
-            $apps.Add([pscustomobject]@{ Name = $name; Scope = $scope; Source = $source.Source; Version = $version; Publisher = [string]$app.Publisher; Location = $installLocation; EstimatedBytes = $estimatedBytes; UninstallCommand = [string]$app.UninstallString })
+            $uninstallCommand = [string]$app.UninstallString
+            $iconPath = Resolve-AppIconPath ([string]$app.DisplayIcon) $installLocation $uninstallCommand $false
+            $apps.Add([pscustomobject]@{ Name = $name; Scope = $scope; Source = $source.Source; Version = $version; Publisher = [string]$app.Publisher; Location = $installLocation; EstimatedBytes = $estimatedBytes; UninstallCommand = $uninstallCommand; IconPath = $iconPath })
         }
     }
     try {
@@ -392,7 +442,9 @@ function Get-InstalledApps {
             $key = '{0}|{1}|store' -f $name, $version
             if ($seen.ContainsKey($key)) { continue }
             $seen[$key] = $true
-            $apps.Add([pscustomobject]@{ Name = $name; Scope = 'user'; Source = 'store'; Version = $version; Publisher = [string]$package.PublisherDisplayName; Location = [string]$package.InstallLocation; EstimatedBytes = 0L; UninstallCommand = '' })
+            $installLocation = [string]$package.InstallLocation
+            $iconPath = Resolve-AppIconPath '' $installLocation '' $true
+            $apps.Add([pscustomobject]@{ Name = $name; Scope = 'user'; Source = 'store'; Version = $version; Publisher = [string]$package.PublisherDisplayName; Location = $installLocation; EstimatedBytes = 0L; UninstallCommand = ''; IconPath = $iconPath })
         }
     } catch { }
     return @($apps | Sort-Object Name, Scope)
@@ -518,6 +570,93 @@ function Render-DriveScan($Result) {
     }
 }
 
+function New-AppAvatar($App) {
+    $bitmap = [System.Drawing.Bitmap]::new(40, 40, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $graphics.Clear([System.Drawing.Color]::Transparent)
+    $palette = @(
+        [System.Drawing.Color]::FromArgb(37, 99, 235), [System.Drawing.Color]::FromArgb(13, 148, 136),
+        [System.Drawing.Color]::FromArgb(124, 58, 237), [System.Drawing.Color]::FromArgb(219, 39, 119),
+        [System.Drawing.Color]::FromArgb(234, 88, 12), [System.Drawing.Color]::FromArgb(22, 163, 74)
+    )
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$App.Name)
+    $seed = 0
+    foreach ($byte in $bytes) { $seed = (($seed * 31) + $byte) % 2147483647 }
+    $background = $palette[$seed % $palette.Count]
+    $backgroundBrush = [System.Drawing.SolidBrush]::new($background)
+    $path = [System.Drawing.Drawing2D.GraphicsPath]::new()
+    $path.AddArc(1, 1, 12, 12, 180, 90)
+    $path.AddArc(27, 1, 12, 12, 270, 90)
+    $path.AddArc(27, 27, 12, 12, 0, 90)
+    $path.AddArc(1, 27, 12, 12, 90, 90)
+    $path.CloseFigure()
+    $graphics.FillPath($backgroundBrush, $path)
+    $drawn = $false
+    $sourceImage = $null
+    try {
+        $iconPath = [string]$App.IconPath
+        if ($iconPath -and (Test-Path -LiteralPath $iconPath -PathType Leaf)) {
+            $extension = [System.IO.Path]::GetExtension($iconPath).ToLowerInvariant()
+            if ($extension -eq '.ico') {
+                $icon = [System.Drawing.Icon]::new($iconPath)
+                $sourceImage = $icon.ToBitmap()
+                $icon.Dispose()
+            } elseif ($extension -in @('.exe','.dll')) {
+                $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($iconPath)
+                if ($icon) { $sourceImage = $icon.ToBitmap(); $icon.Dispose() }
+            } elseif ($extension -in @('.png','.jpg','.jpeg','.bmp')) {
+                $fileImage = [System.Drawing.Image]::FromFile($iconPath)
+                $sourceImage = [System.Drawing.Bitmap]::new($fileImage)
+                $fileImage.Dispose()
+            }
+        }
+        if ($sourceImage) {
+            $graphics.DrawImage($sourceImage, [System.Drawing.Rectangle]::new(4, 4, 32, 32))
+            $drawn = $true
+        }
+    } catch { }
+    if (-not $drawn) {
+        $initial = if ([string]::IsNullOrWhiteSpace([string]$App.Name)) { '?' } else { ([string]$App.Name).Trim().Substring(0,1).ToUpperInvariant() }
+        $font = [System.Drawing.Font]::new('Segoe UI Semibold', 16, [System.Drawing.FontStyle]::Bold)
+        $textBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
+        $format = [System.Drawing.StringFormat]::new()
+        $format.Alignment = [System.Drawing.StringAlignment]::Center
+        $format.LineAlignment = [System.Drawing.StringAlignment]::Center
+        $graphics.DrawString($initial, $font, $textBrush, [System.Drawing.RectangleF]::new(0, 0, 40, 40), $format)
+        $format.Dispose()
+        $textBrush.Dispose()
+        $font.Dispose()
+    }
+    if ($sourceImage) { $sourceImage.Dispose() }
+    $path.Dispose()
+    $backgroundBrush.Dispose()
+    $graphics.Dispose()
+    return $bitmap
+}
+
+function Get-AppImageKey($App) {
+    $key = '{0}|{1}|{2}' -f $App.Source, $App.Name, $App.Version
+    if (-not $script:AppImageList.Images.ContainsKey($key)) {
+        $image = New-AppAvatar $App
+        $script:AppImageList.Images.Add($key, $image)
+        $image.Dispose()
+    }
+    return $key
+}
+
+function Format-ListCell([string]$Value, [int]$Limit) {
+    $text = ($Value -replace '[\r\n\t]+', ' ').Trim()
+    if ($text.Length -le $Limit) { return $text }
+    return $text.Substring(0, [Math]::Max(1, $Limit - 1)).TrimEnd() + '…'
+}
+
+$script:AppImageList = [System.Windows.Forms.ImageList]::new()
+$script:AppImageList.ColorDepth = [System.Windows.Forms.ColorDepth]::Depth32Bit
+$script:AppImageList.ImageSize = [System.Drawing.Size]::new(40, 40)
+$script:AppImageList.TransparentColor = [System.Drawing.Color]::Transparent
+
 function Render-Apps {
     $appsList.Items.Clear()
     $rows = $script:AppRows
@@ -531,11 +670,22 @@ function Render-Apps {
         }
     }
     $rows = $rows | Sort-Object @{ Expression = { if ($_.EstimatedBytes -gt 0) { 0 } else { 1 } } }, @{ Expression = 'EstimatedBytes'; Descending = $true }, Name
+    $rowIndex = 0
     foreach ($app in $rows) {
         $size = if ($app.EstimatedBytes -gt 0) { Format-Bytes $app.EstimatedBytes } else { '—' }
         $scopeText = if ($app.Scope -eq 'user') { T 'scope_user' } else { T 'scope_all' }
         $sourceText = if ($app.Source -eq 'store') { T 'source_store' } else { T 'source_program' }
-        Add-ListRow $appsList @($app.Name, $scopeText, $sourceText, $size, $app.Version, $app.Publisher, $app.Location) $app
+        $item = [System.Windows.Forms.ListViewItem]::new([string]$app.Name, (Get-AppImageKey $app))
+        foreach ($cell in @(
+            @{ Value = $scopeText; Limit = 18 }, @{ Value = $sourceText; Limit = 19 }, @{ Value = $size; Limit = 12 },
+            @{ Value = [string]$app.Version; Limit = 14 }, @{ Value = [string]$app.Publisher; Limit = 23 }, @{ Value = [string]$app.Location; Limit = 31 }
+        )) { [void]$item.SubItems.Add((Format-ListCell ([string]$cell.Value) $cell.Limit)) }
+        $item.Text = Format-ListCell ([string]$app.Name) 32
+        $item.Tag = $app
+        $item.ToolTipText = ('{0}{3}{1}{3}{2}' -f $app.Name, $app.Publisher, $app.Location, [Environment]::NewLine)
+        if (($rowIndex % 2) -eq 1) { $item.BackColor = [System.Drawing.Color]::FromArgb(247, 249, 252) }
+        [void]$appsList.Items.Add($item)
+        $rowIndex++
     }
     $appsNote.Text = (T 'app_count') -f $script:AppRows.Count, $appsList.Items.Count
 }
@@ -621,54 +771,54 @@ function Remove-SafeTargetFiles($Target) {
 $form = [System.Windows.Forms.Form]::new()
 $form.Text = 'Чистка компьютера — программы и диск'
 $form.StartPosition = 'CenterScreen'
-$form.Size = [System.Drawing.Size]::new(1180, 790)
-$form.MinimumSize = [System.Drawing.Size]::new(960, 640)
-$form.Font = [System.Drawing.Font]::new('Segoe UI', 9.5)
-$form.BackColor = [System.Drawing.Color]::FromArgb(243, 246, 250)
+$form.Size = [System.Drawing.Size]::new(1540, 940)
+$form.MinimumSize = [System.Drawing.Size]::new(1240, 800)
+$form.Font = [System.Drawing.Font]::new('Segoe UI', 10)
+$form.BackColor = [System.Drawing.Color]::FromArgb(244, 247, 251)
 
 $headerPanel = [System.Windows.Forms.Panel]::new()
-$headerPanel.Location = [System.Drawing.Point]::new(0, 0)
-$headerPanel.Size = [System.Drawing.Size]::new(1164, 110)
+$headerPanel.Location = [System.Drawing.Point]::new(270, 0)
+$headerPanel.Size = [System.Drawing.Size]::new(1270, 88)
 $headerPanel.Anchor = 'Top,Left,Right'
-$headerPanel.BackColor = [System.Drawing.Color]::FromArgb(28, 43, 62)
+$headerPanel.BackColor = [System.Drawing.Color]::White
 $form.Controls.Add($headerPanel)
 
 $accentLine = [System.Windows.Forms.Panel]::new()
-$accentLine.Location = [System.Drawing.Point]::new(0, 107)
-$accentLine.Size = [System.Drawing.Size]::new(1164, 3)
+$accentLine.Location = [System.Drawing.Point]::new(270, 87)
+$accentLine.Size = [System.Drawing.Size]::new(1270, 2)
 $accentLine.Anchor = 'Top,Left,Right'
-$accentLine.BackColor = [System.Drawing.Color]::FromArgb(59, 130, 246)
+$accentLine.BackColor = [System.Drawing.Color]::FromArgb(219, 231, 249)
 $form.Controls.Add($accentLine)
 
 $title = [System.Windows.Forms.Label]::new()
 $title.Text = 'Программы и место на диске'
 $title.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 18)
-$title.ForeColor = [System.Drawing.Color]::White
+$title.ForeColor = [System.Drawing.Color]::FromArgb(24, 39, 58)
 $title.AutoSize = $true
-$title.Location = [System.Drawing.Point]::new(22, 10)
-$form.Controls.Add($title)
+$title.Location = [System.Drawing.Point]::new(28, 13)
+$headerPanel.Controls.Add($title)
 
 $subtitle = [System.Windows.Forms.Label]::new()
 $subtitle.Text = 'Удаляйте приложения штатно и находите, что занимает место'
 $subtitle.Font = [System.Drawing.Font]::new('Segoe UI', 9.5)
-$subtitle.ForeColor = [System.Drawing.Color]::FromArgb(194, 207, 223)
+$subtitle.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
 $subtitle.AutoSize = $true
-$subtitle.Location = [System.Drawing.Point]::new(24, 40)
-$form.Controls.Add($subtitle)
+$subtitle.Location = [System.Drawing.Point]::new(30, 49)
+$headerPanel.Controls.Add($subtitle)
 
 $driveCaption = [System.Windows.Forms.Label]::new()
 $driveCaption.Text = 'Диск для анализа:'
 $driveCaption.ForeColor = [System.Drawing.Color]::FromArgb(225, 233, 243)
 $driveCaption.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 9)
 $driveCaption.AutoSize = $true
-$driveCaption.Location = [System.Drawing.Point]::new(24, 78)
+$driveCaption.Location = [System.Drawing.Point]::new(18, 0)
 $form.Controls.Add($driveCaption)
 
 $driveCombo = [System.Windows.Forms.ComboBox]::new()
 $driveCombo.DropDownStyle = 'DropDownList'
 $driveCombo.FlatStyle = 'Flat'
-$driveCombo.Location = [System.Drawing.Point]::new(150, 72)
-$driveCombo.Size = [System.Drawing.Size]::new(360, 29)
+$driveCombo.Location = [System.Drawing.Point]::new(16, 0)
+$driveCombo.Size = [System.Drawing.Size]::new(238, 30)
 $driveCombo.DisplayMember = 'Display'
 $driveCombo.BackColor = [System.Drawing.Color]::White
 $driveCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
@@ -676,22 +826,22 @@ $form.Controls.Add($driveCombo)
 
 $driveInfoLabel = [System.Windows.Forms.Label]::new()
 $driveInfoLabel.AutoSize = $true
-$driveInfoLabel.ForeColor = [System.Drawing.Color]::FromArgb(210, 222, 237)
-$driveInfoLabel.Location = [System.Drawing.Point]::new(530, 79)
+$driveInfoLabel.ForeColor = [System.Drawing.Color]::FromArgb(188, 201, 219)
+$driveInfoLabel.Location = [System.Drawing.Point]::new(18, 0)
 $form.Controls.Add($driveInfoLabel)
 
 $languageLabel = [System.Windows.Forms.Label]::new()
 $languageLabel.AutoSize = $true
-$languageLabel.ForeColor = [System.Drawing.Color]::FromArgb(225, 233, 243)
+$languageLabel.ForeColor = [System.Drawing.Color]::FromArgb(188, 201, 219)
 $languageLabel.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 9)
-$languageLabel.Location = [System.Drawing.Point]::new(880, 22)
+$languageLabel.Location = [System.Drawing.Point]::new(18, 0)
 $form.Controls.Add($languageLabel)
 
 $languageCombo = [System.Windows.Forms.ComboBox]::new()
 $languageCombo.DropDownStyle = 'DropDownList'
 $languageCombo.FlatStyle = 'Flat'
-$languageCombo.Location = [System.Drawing.Point]::new(946, 15)
-$languageCombo.Size = [System.Drawing.Size]::new(185, 29)
+$languageCombo.Location = [System.Drawing.Point]::new(16, 0)
+$languageCombo.Size = [System.Drawing.Size]::new(238, 30)
 $languageCombo.BackColor = [System.Drawing.Color]::White
 $languageCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
 [void]$languageCombo.Items.Add('Русский')
@@ -700,10 +850,13 @@ $languageCombo.SelectedIndex = 1
 $form.Controls.Add($languageCombo)
 
 $tabs = [System.Windows.Forms.TabControl]::new()
-$tabs.Location = [System.Drawing.Point]::new(18, 116)
-$tabs.Size = [System.Drawing.Size]::new(1128, 587)
+$tabs.Location = [System.Drawing.Point]::new(286, 104)
+$tabs.Size = [System.Drawing.Size]::new(1238, 776)
 $tabs.Anchor = 'Top,Bottom,Left,Right'
 $tabs.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 9)
+$tabs.Appearance = 'FlatButtons'
+$tabs.SizeMode = 'Fixed'
+$tabs.ItemSize = [System.Drawing.Size]::new(1, 1)
 $form.Controls.Add($tabs)
 
 $cleanupTab = [System.Windows.Forms.TabPage]::new('Очистка')
@@ -739,8 +892,8 @@ $cleanupList.View = 'Details'
 $cleanupList.FullRowSelect = $true
 $cleanupList.GridLines = $true
 $cleanupList.HideSelection = $false
-$cleanupList.Location = [System.Drawing.Point]::new(12, 56)
-$cleanupList.Size = [System.Drawing.Size]::new(1090, 425)
+$cleanupList.Location = [System.Drawing.Point]::new(16, 18)
+$cleanupList.Size = [System.Drawing.Size]::new(1194, 590)
 $cleanupList.Anchor = 'Top,Bottom,Left,Right'
 [void]$cleanupList.Columns.Add('Тип папки', 220)
 [void]$cleanupList.Columns.Add('Путь', 420)
@@ -751,8 +904,8 @@ $cleanupTab.Controls.Add($cleanupList)
 
 $cleanupNote = [System.Windows.Forms.Label]::new()
 $cleanupNote.Text = 'Предлагаются файлы из временных папок и старые отчёты о сбоях, изменённые более 24 часов назад и не открывавшиеся по метаданным Windows более 90 дней (для отчётов о сбоях — изменённые более 30 дней назад). Время доступа может быть неточным.'
-$cleanupNote.Location = [System.Drawing.Point]::new(12, 490)
-$cleanupNote.Size = [System.Drawing.Size]::new(1080, 55)
+$cleanupNote.Location = [System.Drawing.Point]::new(16, 624)
+$cleanupNote.Size = [System.Drawing.Size]::new(1194, 78)
 $cleanupNote.Anchor = 'Bottom,Left,Right'
 $cleanupNote.ForeColor = [System.Drawing.Color]::FromArgb(85, 95, 110)
 $cleanupTab.Controls.Add($cleanupNote)
@@ -774,8 +927,8 @@ $largeList.View = 'Details'
 $largeList.FullRowSelect = $true
 $largeList.GridLines = $true
 $largeList.HideSelection = $false
-$largeList.Location = [System.Drawing.Point]::new(12, 56)
-$largeList.Size = [System.Drawing.Size]::new(1090, 425)
+$largeList.Location = [System.Drawing.Point]::new(16, 18)
+$largeList.Size = [System.Drawing.Size]::new(1194, 590)
 $largeList.Anchor = 'Top,Bottom,Left,Right'
 [void]$largeList.Columns.Add('Папка', 310)
 [void]$largeList.Columns.Add('Размер', 130)
@@ -785,8 +938,8 @@ $largeTab.Controls.Add($largeList)
 
 $largeNote = [System.Windows.Forms.Label]::new()
 $largeNote.Text = 'Обычные папки приложение не удаляет. Если папка давно не открывалась, проверьте её содержимое вручную.'
-$largeNote.Location = [System.Drawing.Point]::new(12, 490)
-$largeNote.Size = [System.Drawing.Size]::new(1080, 55)
+$largeNote.Location = [System.Drawing.Point]::new(16, 624)
+$largeNote.Size = [System.Drawing.Size]::new(1194, 78)
 $largeNote.Anchor = 'Bottom,Left,Right'
 $largeNote.ForeColor = [System.Drawing.Color]::FromArgb(85, 95, 110)
 $largeTab.Controls.Add($largeNote)
@@ -800,26 +953,26 @@ $appsTab.Controls.Add($appsRefreshButton)
 $appsSearchLabel = [System.Windows.Forms.Label]::new()
 $appsSearchLabel.Text = 'Поиск:'
 $appsSearchLabel.AutoSize = $true
-$appsSearchLabel.Location = [System.Drawing.Point]::new(154, 21)
+$appsSearchLabel.Location = [System.Drawing.Point]::new(18, 22)
 $appsTab.Controls.Add($appsSearchLabel)
 
 $appsSearch = [System.Windows.Forms.TextBox]::new()
-$appsSearch.Location = [System.Drawing.Point]::new(205, 15)
-$appsSearch.Size = [System.Drawing.Size]::new(220, 28)
+$appsSearch.Location = [System.Drawing.Point]::new(88, 15)
+$appsSearch.Size = [System.Drawing.Size]::new(330, 32)
 $appsSearch.Font = [System.Drawing.Font]::new('Segoe UI', 9)
 $appsTab.Controls.Add($appsSearch)
 
 $appsFilterLabel = [System.Windows.Forms.Label]::new()
 $appsFilterLabel.Text = 'Показать:'
 $appsFilterLabel.AutoSize = $true
-$appsFilterLabel.Location = [System.Drawing.Point]::new(438, 21)
+$appsFilterLabel.Location = [System.Drawing.Point]::new(444, 22)
 $appsTab.Controls.Add($appsFilterLabel)
 
 $appsFilter = [System.Windows.Forms.ComboBox]::new()
 $appsFilter.DropDownStyle = 'DropDownList'
 $appsFilter.FlatStyle = 'Flat'
-$appsFilter.Location = [System.Drawing.Point]::new(500, 15)
-$appsFilter.Size = [System.Drawing.Size]::new(180, 28)
+$appsFilter.Location = [System.Drawing.Point]::new(510, 15)
+$appsFilter.Size = [System.Drawing.Size]::new(230, 32)
 [void]$appsFilter.Items.Add('Все программы')
 [void]$appsFilter.Items.Add('Пользовательские')
 [void]$appsFilter.Items.Add('Для всех пользователей')
@@ -844,22 +997,24 @@ $appsList.FullRowSelect = $true
 $appsList.MultiSelect = $true
 $appsList.GridLines = $true
 $appsList.HideSelection = $false
-$appsList.Location = [System.Drawing.Point]::new(12, 56)
-$appsList.Size = [System.Drawing.Size]::new(1090, 425)
+$appsList.Location = [System.Drawing.Point]::new(16, 62)
+$appsList.Size = [System.Drawing.Size]::new(1194, 546)
 $appsList.Anchor = 'Top,Bottom,Left,Right'
-[void]$appsList.Columns.Add('Название', 225)
-[void]$appsList.Columns.Add('Установка', 130)
-[void]$appsList.Columns.Add('Источник', 130)
-[void]$appsList.Columns.Add('Размер*', 85)
-[void]$appsList.Columns.Add('Версия', 90)
-[void]$appsList.Columns.Add('Издатель', 175)
-[void]$appsList.Columns.Add('Папка установки', 250)
+$appsList.SmallImageList = $script:AppImageList
+$appsList.ShowItemToolTips = $true
+[void]$appsList.Columns.Add('Название', 280)
+[void]$appsList.Columns.Add('Установка', 140)
+[void]$appsList.Columns.Add('Источник', 145)
+[void]$appsList.Columns.Add('Размер*', 100)
+[void]$appsList.Columns.Add('Версия', 100)
+[void]$appsList.Columns.Add('Издатель', 180)
+[void]$appsList.Columns.Add('Папка установки', 240)
 $appsTab.Controls.Add($appsList)
 
 $appsNote = [System.Windows.Forms.Label]::new()
 $appsNote.Text = 'Выберите одну или несколько программ и нажмите «Удалить выбранные». Будут по очереди запущены штатные деинсталляторы; записи без обычной команды и приложения Store открываются через Windows.'
-$appsNote.Location = [System.Drawing.Point]::new(12, 490)
-$appsNote.Size = [System.Drawing.Size]::new(1080, 55)
+$appsNote.Location = [System.Drawing.Point]::new(16, 624)
+$appsNote.Size = [System.Drawing.Size]::new(1194, 78)
 $appsNote.Anchor = 'Bottom,Left,Right'
 $appsNote.ForeColor = [System.Drawing.Color]::FromArgb(85, 95, 110)
 $appsTab.Controls.Add($appsNote)
@@ -915,7 +1070,7 @@ foreach ($list in @($cleanupList, $largeList, $appsList)) {
     $list.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
     $list.BorderStyle = 'FixedSingle'
     $list.GridLines = $false
-    $list.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+    $list.Font = [System.Drawing.Font]::new('Segoe UI', 10)
     $list.HotTracking = $true
 }
 foreach ($noteLabel in @($cleanupNote, $largeNote, $appsNote)) {
@@ -923,6 +1078,134 @@ foreach ($noteLabel in @($cleanupNote, $largeNote, $appsNote)) {
     $noteLabel.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
     $noteLabel.Font = [System.Drawing.Font]::new('Segoe UI', 9)
 }
+
+$sidebar = [System.Windows.Forms.Panel]::new()
+$sidebar.Dock = 'Left'
+$sidebar.Width = 270
+$sidebar.BackColor = [System.Drawing.Color]::FromArgb(20, 32, 49)
+$sidebar.Padding = [System.Windows.Forms.Padding]::new(0)
+$form.Controls.Add($sidebar)
+$sidebar.BringToFront()
+
+$logoPanel = [System.Windows.Forms.Panel]::new()
+$logoPanel.Location = [System.Drawing.Point]::new(18, 18)
+$logoPanel.Size = [System.Drawing.Size]::new(46, 46)
+$logoPanel.BackColor = [System.Drawing.Color]::Transparent
+$logoPanel.Add_Paint({
+    param($sender, $eventArgs)
+    $g = $eventArgs.Graphics
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $tile = [System.Drawing.Drawing2D.GraphicsPath]::new()
+    $tile.AddArc(0, 0, 14, 14, 180, 90); $tile.AddArc(32, 0, 14, 14, 270, 90)
+    $tile.AddArc(32, 32, 14, 14, 0, 90); $tile.AddArc(0, 32, 14, 14, 90, 90); $tile.CloseFigure()
+    $gradient = [System.Drawing.Drawing2D.LinearGradientBrush]::new([System.Drawing.Rectangle]::new(0, 0, 46, 46), [System.Drawing.Color]::FromArgb(59, 130, 246), [System.Drawing.Color]::FromArgb(20, 184, 166), 35)
+    $g.FillPath($gradient, $tile)
+    $pen = [System.Drawing.Pen]::new([System.Drawing.Color]::White, 3.2)
+    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round; $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $g.DrawLines($pen, [System.Drawing.Point[]]@([System.Drawing.Point]::new(11, 24), [System.Drawing.Point]::new(19, 31), [System.Drawing.Point]::new(35, 14)))
+    $spark = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(225, 245, 255))
+    $g.FillEllipse($spark, 31, 4, 5, 5)
+    $spark.Dispose(); $pen.Dispose(); $gradient.Dispose(); $tile.Dispose()
+})
+$sidebar.Controls.Add($logoPanel)
+
+$brandTitle = [System.Windows.Forms.Label]::new()
+$brandTitle.Text = 'Windows Cleaner'
+$brandTitle.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 14)
+$brandTitle.ForeColor = [System.Drawing.Color]::White
+$brandTitle.AutoSize = $true
+$brandTitle.Location = [System.Drawing.Point]::new(75, 20)
+$sidebar.Controls.Add($brandTitle)
+
+$brandTagline = [System.Windows.Forms.Label]::new()
+$brandTagline.Font = [System.Drawing.Font]::new('Segoe UI', 8.5)
+$brandTagline.ForeColor = [System.Drawing.Color]::FromArgb(162, 178, 200)
+$brandTagline.AutoSize = $false
+$brandTagline.Location = [System.Drawing.Point]::new(76, 46)
+$brandTagline.Size = [System.Drawing.Size]::new(178, 30)
+$sidebar.Controls.Add($brandTagline)
+
+$navHeading = [System.Windows.Forms.Label]::new()
+$navHeading.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 8)
+$navHeading.ForeColor = [System.Drawing.Color]::FromArgb(125, 146, 172)
+$navHeading.AutoSize = $true
+$navHeading.Location = [System.Drawing.Point]::new(20, 100)
+$sidebar.Controls.Add($navHeading)
+
+function New-SidebarNavButton([string]$Glyph) {
+    $button = [System.Windows.Forms.Button]::new()
+    $button.Text = $Glyph
+    $button.Size = [System.Drawing.Size]::new(242, 42)
+    $button.FlatStyle = 'Flat'
+    $button.FlatAppearance.BorderSize = 0
+    $button.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(38, 54, 76)
+    $button.FlatAppearance.MouseDownBackColor = [System.Drawing.Color]::FromArgb(48, 68, 94)
+    $button.BackColor = [System.Drawing.Color]::FromArgb(20, 32, 49)
+    $button.ForeColor = [System.Drawing.Color]::FromArgb(201, 213, 229)
+    $button.TextAlign = 'MiddleLeft'
+    $button.Padding = [System.Windows.Forms.Padding]::new(12, 0, 6, 0)
+    $button.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 9.5)
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    return $button
+}
+
+$navApps = New-SidebarNavButton '▦'
+$navCleanup = New-SidebarNavButton '✧'
+$navLarge = New-SidebarNavButton '▤'
+$navAdvice = New-SidebarNavButton 'ⓘ'
+$navApps.Location = [System.Drawing.Point]::new(14, 124)
+$navCleanup.Location = [System.Drawing.Point]::new(14, 170)
+$navLarge.Location = [System.Drawing.Point]::new(14, 216)
+$navAdvice.Location = [System.Drawing.Point]::new(14, 262)
+foreach ($nav in @($navApps, $navCleanup, $navLarge, $navAdvice)) { $sidebar.Controls.Add($nav) }
+
+$activeMarker = [System.Windows.Forms.Panel]::new()
+$activeMarker.Size = [System.Drawing.Size]::new(3, 28)
+$activeMarker.BackColor = [System.Drawing.Color]::FromArgb(96, 165, 250)
+$sidebar.Controls.Add($activeMarker)
+$activeMarker.BringToFront()
+
+$actionHeading = [System.Windows.Forms.Label]::new()
+$actionHeading.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 8)
+$actionHeading.ForeColor = [System.Drawing.Color]::FromArgb(125, 146, 172)
+$actionHeading.AutoSize = $true
+$actionHeading.Location = [System.Drawing.Point]::new(20, 326)
+$sidebar.Controls.Add($actionHeading)
+
+$script:SidebarActionButtons = @($appsRefreshButton, $uninstallSelectedButton, $manageAppsButton, $cleanupRefreshButton, $cleanSelectedButton, $binButton, $scanDriveButton, $openFolderButton)
+foreach ($button in $script:SidebarActionButtons) {
+    $button.Size = [System.Drawing.Size]::new(242, 42)
+    $button.TextAlign = 'MiddleLeft'
+    $button.Padding = [System.Windows.Forms.Padding]::new(12, 0, 6, 0)
+    $button.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 8.5)
+    $button.Visible = $false
+    $sidebar.Controls.Add($button)
+}
+
+$driveCaption.Text = ''
+$driveCaption.AutoSize = $false
+$driveCaption.Size = [System.Drawing.Size]::new(236, 22)
+$driveCaption.ForeColor = [System.Drawing.Color]::FromArgb(125, 146, 172)
+$driveCaption.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 8)
+$driveCombo.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+$driveInfoLabel.AutoSize = $false
+$driveInfoLabel.Size = [System.Drawing.Size]::new(236, 42)
+$driveInfoLabel.Font = [System.Drawing.Font]::new('Segoe UI', 8.5)
+$driveInfoLabel.TextAlign = 'TopLeft'
+$languageLabel.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 8)
+$languageCombo.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+foreach ($control in @($driveCaption, $driveCombo, $driveInfoLabel, $languageLabel, $languageCombo)) { $sidebar.Controls.Add($control) }
+
+$script:SidebarNav = @(
+    [pscustomobject]@{ Button = $navApps; Page = $appsTab; Glyph = '▦'; TextKey = 'tab_apps' }
+    [pscustomobject]@{ Button = $navCleanup; Page = $cleanupTab; Glyph = '✧'; TextKey = 'tab_cleanup' }
+    [pscustomobject]@{ Button = $navLarge; Page = $largeTab; Glyph = '▤'; TextKey = 'tab_large' }
+    [pscustomobject]@{ Button = $navAdvice; Page = $adviceTab; Glyph = 'ⓘ'; TextKey = 'tab_advice' }
+)
+
+$driveCombo.DisplayMember = 'Display'
+$driveCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+$languageCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
 
 $adviceText = [System.Windows.Forms.RichTextBox]::new()
 $adviceText.ReadOnly = $true
@@ -932,7 +1215,7 @@ $adviceText.Font = [System.Drawing.Font]::new('Segoe UI', 10)
 $adviceText.DetectUrls = $true
 $adviceText.ScrollBars = 'Vertical'
 $adviceText.Location = [System.Drawing.Point]::new(12, 12)
-$adviceText.Size = [System.Drawing.Size]::new(1090, 535)
+$adviceText.Size = [System.Drawing.Size]::new(1194, 702)
 $adviceText.Anchor = 'Top,Bottom,Left,Right'
 $adviceText.ForeColor = [System.Drawing.Color]::FromArgb(51, 65, 85)
 $adviceText.SelectionIndent = 12
@@ -958,20 +1241,91 @@ $adviceText.Text = @(
 $adviceTab.Controls.Add($adviceText)
 
 $statusPanel = [System.Windows.Forms.Panel]::new()
-$statusPanel.Location = [System.Drawing.Point]::new(0, 704)
-$statusPanel.Size = [System.Drawing.Size]::new(1164, 48)
+$statusPanel.Location = [System.Drawing.Point]::new(270, 886)
+$statusPanel.Size = [System.Drawing.Size]::new(1270, 54)
 $statusPanel.Anchor = 'Bottom,Left,Right'
 $statusPanel.BackColor = [System.Drawing.Color]::White
 $form.Controls.Add($statusPanel)
 
 $statusLabel = [System.Windows.Forms.Label]::new()
 $statusLabel.AutoSize = $false
-$statusLabel.Location = [System.Drawing.Point]::new(22, 716)
-$statusLabel.Size = [System.Drawing.Size]::new(1120, 24)
+$statusLabel.Location = [System.Drawing.Point]::new(22, 16)
+$statusLabel.Size = [System.Drawing.Size]::new(1220, 24)
 $statusLabel.Anchor = 'Bottom,Left,Right'
 $statusLabel.Font = [System.Drawing.Font]::new('Segoe UI', 9)
 $statusLabel.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
-$form.Controls.Add($statusLabel)
+$statusPanel.Controls.Add($statusLabel)
+
+function Set-SidebarActions {
+    foreach ($button in $script:SidebarActionButtons) { $button.Visible = $false }
+    $actions = @()
+    if ($tabs.SelectedTab -eq $appsTab) { $actions = @($appsRefreshButton, $uninstallSelectedButton, $manageAppsButton) }
+    elseif ($tabs.SelectedTab -eq $cleanupTab) { $actions = @($cleanupRefreshButton, $cleanSelectedButton, $binButton) }
+    elseif ($tabs.SelectedTab -eq $largeTab) { $actions = @($scanDriveButton, $openFolderButton) }
+    $actionHeading.Visible = ($actions.Count -gt 0)
+    for ($i = 0; $i -lt $actions.Count; $i++) {
+        $button = $actions[$i]
+        $button.Location = [System.Drawing.Point]::new(14, 350 + ($i * 48))
+        $button.Visible = $true
+    }
+}
+
+function Update-SidebarSelection {
+    foreach ($entry in $script:SidebarNav) {
+        $isSelected = ($tabs.SelectedTab -eq $entry.Page)
+        $entry.Button.BackColor = if ($isSelected) { [System.Drawing.Color]::FromArgb(40, 59, 83) } else { [System.Drawing.Color]::FromArgb(20, 32, 49) }
+        $entry.Button.ForeColor = if ($isSelected) { [System.Drawing.Color]::White } else { [System.Drawing.Color]::FromArgb(201, 213, 229) }
+        if ($isSelected) { $script:ActiveMarkerTargetY = $entry.Button.Top + 7 }
+    }
+    $title.Text = $tabs.SelectedTab.Text
+    Set-SidebarActions
+    if ($script:MarkerTimer -and -not $script:MarkerTimer.Enabled) { $script:MarkerTimer.Start() }
+}
+
+function Update-WindowLayout {
+    if (-not $form.IsHandleCreated) { return }
+    $clientWidth = $form.ClientSize.Width
+    $clientHeight = $form.ClientSize.Height
+    $sidebar.Width = 270
+    $sidebar.Height = $clientHeight
+    $headerPanel.Location = [System.Drawing.Point]::new(270, 0)
+    $headerPanel.Size = [System.Drawing.Size]::new([Math]::Max(300, $clientWidth - 270), 88)
+    $accentLine.Location = [System.Drawing.Point]::new(270, 87)
+    $accentLine.Size = [System.Drawing.Size]::new([Math]::Max(300, $clientWidth - 270), 2)
+    $tabs.Location = [System.Drawing.Point]::new(286, 104)
+    $tabs.Size = [System.Drawing.Size]::new([Math]::Max(300, $clientWidth - 302), [Math]::Max(300, $clientHeight - 164))
+    $statusPanel.Location = [System.Drawing.Point]::new(270, $clientHeight - 54)
+    $statusPanel.Size = [System.Drawing.Size]::new([Math]::Max(300, $clientWidth - 270), 54)
+    $statusLabel.Size = [System.Drawing.Size]::new([Math]::Max(240, $statusPanel.ClientSize.Width - 44), 24)
+    $driveCaption.Location = [System.Drawing.Point]::new(18, $clientHeight - 198)
+    $driveCombo.Location = [System.Drawing.Point]::new(16, $clientHeight - 174)
+    $driveInfoLabel.Location = [System.Drawing.Point]::new(18, $clientHeight - 137)
+    $languageLabel.Location = [System.Drawing.Point]::new(18, $clientHeight - 82)
+    $languageCombo.Location = [System.Drawing.Point]::new(16, $clientHeight - 60)
+}
+
+$script:ActiveMarkerTargetY = $navApps.Top + 7
+$activeMarker.Location = [System.Drawing.Point]::new(8, $script:ActiveMarkerTargetY)
+$script:MarkerTimer = [System.Windows.Forms.Timer]::new()
+$script:MarkerTimer.Interval = 15
+$script:MarkerTimer.Add_Tick({
+    $delta = $script:ActiveMarkerTargetY - $activeMarker.Top
+    if ([Math]::Abs($delta) -le 2) { $activeMarker.Top = $script:ActiveMarkerTargetY; $script:MarkerTimer.Stop() }
+    else { $activeMarker.Top += [Math]::Sign($delta) * [Math]::Max(2, [Math]::Ceiling([Math]::Abs($delta) / 3)) }
+})
+$script:FadeTimer = [System.Windows.Forms.Timer]::new()
+$script:FadeTimer.Interval = 16
+$script:FadeTimer.Add_Tick({
+    $nextOpacity = [Math]::Min(1.0, $form.Opacity + 0.12)
+    $form.Opacity = $nextOpacity
+    if ($nextOpacity -ge 1.0) { $script:FadeTimer.Stop() }
+})
+$form.Opacity = 0.0
+$form.Add_Resize({ Update-WindowLayout })
+$navApps.Add_Click({ $tabs.SelectedTab = $appsTab })
+$navCleanup.Add_Click({ $tabs.SelectedTab = $cleanupTab })
+$navLarge.Add_Click({ $tabs.SelectedTab = $largeTab })
+$navAdvice.Add_Click({ $tabs.SelectedTab = $adviceTab })
 
 function Set-UiLanguage([string]$Language) {
     $script:Language = if ($Language -eq 'en') { 'en' } else { 'ru' }
@@ -979,7 +1333,10 @@ function Set-UiLanguage([string]$Language) {
     $form.Text = T 'app_title'
     $title.Text = T 'header_title'
     $subtitle.Text = T 'subtitle'
-    $driveCaption.Text = T 'drive_caption'
+    $brandTagline.Text = T 'sidebar_tagline'
+    $navHeading.Text = T 'nav_section'
+    $actionHeading.Text = T 'action_section'
+    $driveCaption.Text = T 'drive_section'
     $languageLabel.Text = T 'language_label'
     $appsTab.Text = T 'tab_apps'
     $cleanupTab.Text = T 'tab_cleanup'
@@ -1034,6 +1391,8 @@ function Set-UiLanguage([string]$Language) {
     }
     if ($script:LastDriveResult) { Render-DriveScan $script:LastDriveResult }
     if ($script:AppRows.Count -gt 0) { $statusLabel.Text = T 'app_loaded' }
+    foreach ($entry in $script:SidebarNav) { $entry.Button.Text = $entry.Glyph + '   ' + (T $entry.TextKey) }
+    Update-SidebarSelection
 }
 
 Set-UiLanguage 'en'
@@ -1092,6 +1451,7 @@ $driveCombo.Add_SelectedIndexChanged({
     if ($tabs.SelectedTab -eq $cleanupTab) { Start-CleanupEstimate }
 })
 $tabs.Add_SelectedIndexChanged({
+    Update-SidebarSelection
     if ($tabs.SelectedTab -eq $cleanupTab -and $cleanupList.Items.Count -eq 0) { Start-CleanupEstimate }
     if ($tabs.SelectedTab -eq $appsTab -and $appsList.Items.Count -eq 0) {
         $statusLabel.Text = T 'app_loading'
@@ -1193,6 +1553,9 @@ $manageAppsButton.Add_Click({
 })
 
 $form.Add_Shown({
+    Update-WindowLayout
+    Update-SidebarSelection
+    $script:FadeTimer.Start()
     Refresh-DriveState
     if ($appsList.Items.Count -eq 0) {
         $statusLabel.Text = T 'app_loading'

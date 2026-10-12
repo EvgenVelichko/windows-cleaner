@@ -6,6 +6,8 @@ A Windows desktop app for managing installed programs and finding ways to free d
 
 Run **[WindowsCleaner.exe](WindowsCleaner.exe)**. It is a single-file application; no companion files are needed at runtime. The app targets 64-bit Windows and uses the Windows PowerShell and Windows Forms components available on Windows.
 
+The interface has a dark left sidebar for navigation and quick actions, a custom Windows Cleaner mark, subtle transitions, and a language selector at the bottom of the sidebar. Installed apps show their registered Windows or Store icon when available, with a generated monogram as a fallback. Long values stay available in tooltips.
+
 ## Features
 
 - Installed-app catalog from Windows uninstall records and Microsoft Store packages for the current user.
@@ -15,7 +17,7 @@ Run **[WindowsCleaner.exe](WindowsCleaner.exe)**. It is a single-file applicatio
 - Open Windows Settings for Store apps or entries without a supported standard uninstall command.
 - Scan a selected drive for large folders and show estimated last-access times and folder guidance.
 - Clean old files from known temporary folders and empty the Recycle Bin after confirmation.
-- Switch the interface between English and Russian in the top-right corner.
+- Switch the interface between English and Russian in the sidebar.
 
 ## Build from source
 
