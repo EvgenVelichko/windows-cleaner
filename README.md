@@ -12,10 +12,10 @@ The interface has a dark left sidebar for navigation and quick actions, a custom
 
 - Installed-app catalog from Windows uninstall records and Microsoft Store packages for the current user.
 - Search by app name, publisher, version, and source; filter by installation scope.
-- Publisher, version, install folder, and installer-reported size estimate when available.
+- Publisher, version, install folder, and installer-reported size; if it is missing, the app estimates size from readable install folders in the background. Folder-based or partial estimates are marked with `≈`.
 - Select multiple apps and launch their registered uninstallers sequentially after confirmation.
 - Open Windows Settings for Store apps or entries without a supported standard uninstall command.
-- Scan a selected drive for large folders and show estimated last-access times and folder guidance.
+- On startup, estimate cleanup candidates and scan the selected drive for large folders, then calculate missing app-folder sizes in the background. Scanning runs sequentially to keep the interface responsive.
 - Clean old files from known temporary folders and empty the Recycle Bin after confirmation.
 - Switch the interface between English and Russian in the sidebar.
 

@@ -159,6 +159,72 @@ public static class CleanerScanner
     }
 }
 
+public sealed class CleanerAppSizeResult
+{
+    public int Index { get; set; }
+    public long Bytes { get; set; }
+    public bool Partial { get; set; }
+}
+
+public static class CleanerAppSizeScanner
+{
+    public static Task<CleanerAppSizeResult[]> Start(string[] paths, int maxEntriesPerPath, int maxTotalEntries)
+    {
+        return Task.Factory.StartNew(() => Measure(paths, maxEntriesPerPath, maxTotalEntries), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+    }
+
+    private static CleanerAppSizeResult[] Measure(string[] paths, int maxEntriesPerPath, int maxTotalEntries)
+    {
+        var result = new CleanerAppSizeResult[paths.Length];
+        int totalEntries = 0;
+        for (int i = 0; i < paths.Length; i++)
+        {
+            var item = new CleanerAppSizeResult { Index = i };
+            result[i] = item;
+            if (String.IsNullOrWhiteSpace(paths[i]) || !Directory.Exists(paths[i])) { item.Partial = true; continue; }
+            string root;
+            try { root = Path.GetFullPath(paths[i]).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
+            catch { item.Partial = true; continue; }
+            if (String.IsNullOrWhiteSpace(root) || root.Length < 4 || root.Equals(Path.GetPathRoot(root).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)) { item.Partial = true; continue; }
+            var pending = new Stack<string>();
+            pending.Push(root);
+            int pathEntries = 0;
+            while (pending.Count > 0)
+            {
+                string directory = pending.Pop();
+                IEnumerable<string> entries;
+                try { entries = Directory.EnumerateFileSystemEntries(directory); }
+                catch { item.Partial = true; continue; }
+                try
+                {
+                    foreach (string entry in entries)
+                    {
+                        pathEntries++;
+                        totalEntries++;
+                        if (pathEntries > maxEntriesPerPath || totalEntries > maxTotalEntries) { item.Partial = true; pending.Clear(); break; }
+                        try
+                        {
+                            var attributes = File.GetAttributes(entry);
+                            if ((attributes & FileAttributes.ReparsePoint) != 0) { item.Partial = true; continue; }
+                            if ((attributes & FileAttributes.Directory) != 0) { pending.Push(entry); continue; }
+                            item.Bytes += new FileInfo(entry).Length;
+                        }
+                        catch { item.Partial = true; }
+                    }
+                }
+                catch { item.Partial = true; }
+                if (totalEntries > maxTotalEntries) break;
+            }
+            if (totalEntries > maxTotalEntries)
+            {
+                for (int remaining = i + 1; remaining < paths.Length; remaining++) result[remaining] = new CleanerAppSizeResult { Index = remaining, Partial = true };
+                break;
+            }
+        }
+        return result;
+    }
+}
+
 public sealed class CleanerUninstallResult
 {
     public string Name { get; set; }
@@ -216,6 +282,8 @@ $script:AppRows = @()
 $script:SafeTargets = @()
 $script:LastCleanupRows = @()
 $script:LastDriveResult = $null
+$script:AppSizeTaskRows = @()
+$script:StartupScanQueue = [System.Collections.Queue]::new()
 $script:Language = 'en'
 $script:Texts = @{
     ru = @{
@@ -226,12 +294,12 @@ $script:Texts = @{
         cleanup_note = 'Предлагаются старые файлы из временных папок и отчётов о сбоях. Время последнего доступа может быть неточным.'; scan_large = 'Сканировать диск на большие папки'; open_folder = 'Открыть выбранную папку'; large_folder = 'Папка'; size = 'Размер'; recommendation = 'Рекомендация'; large_note = 'Обычные папки приложение не удаляет. Если папка давно не открывалась, проверьте её содержимое вручную.'
         refresh_apps = 'Обновить список'; search = 'Поиск:'; show = 'Показать:'; filter_all = 'Все программы'; filter_user = 'Пользовательские'; filter_all_users = 'Для всех пользователей'; windows_button = 'Store и Windows…'; uninstall_button = 'Удалить выбранные…'
         col_name = 'Название'; col_scope = 'Установка'; col_source = 'Источник'; col_size = 'Размер*'; col_version = 'Версия'; col_publisher = 'Издатель'; col_location = 'Папка установки'
-        apps_note = 'Выберите одну или несколько программ и нажмите «Удалить выбранные». Будут по очереди запущены штатные деинсталляторы; записи без обычной команды и приложения Store открываются через Windows.'
-        app_count = 'Найдено: {0}; показано: {1}. Можно выбрать несколько программ. Размер — оценка из данных установщика, если он её указал.'
+        apps_note = 'Выберите программы и нажмите «Удалить выбранные». Запускаются штатные деинсталляторы; для Store и записей без команды используется Windows. Если установщик не сообщил размер, программа измерит папку приложения; знак ≈ отмечает такую оценку или неполный подсчёт.'
+        app_count = 'Найдено: {0}; показано: {1}. Можно выбрать несколько программ. Размер берётся из данных установщика или оценивается по папке приложения.'
         scope_user = 'Пользовательская'; scope_all = 'Для всех пользователей'; source_program = 'Обычная программа'; source_store = 'Microsoft Store'
         cleanup_empty = 'На выбранном диске нет известных временных папок'; cleanup_hint = 'Проверьте вкладку «Большие папки»'; cleanup_hint_change = 'Смените диск или проверьте вкладку «Большие папки»'; cleanup_none = 'Не найдено известных временных папок на выбранном диске.'
         cleanup_estimating = 'Подсчитываю старые файлы во временных папках…'; drive_scanning = 'Сканирую {0}. На большом диске это может занять несколько минут…'; cleanup_done = 'Оценка временных файлов обновлена.'; drive_done = 'Сканирование диска завершено.'; scan_error = 'Ошибка сканирования: {0}'
-        app_loading = 'Загружаю каталог установленных программ…'; app_loaded = 'Каталог программ готов. Выберите приложение для просмотра или удаления.'; app_refreshing = 'Загружаю список зарегистрированных программ…'; app_refreshed = 'Список программ обновлён.'
+        app_loading = 'Загружаю каталог установленных программ…'; app_loaded = 'Каталог программ готов. Выберите приложение для просмотра или удаления.'; app_refreshing = 'Загружаю список зарегистрированных программ…'; app_refreshed = 'Список программ обновлён.'; app_sizes_scanning = 'Считаю размер папок {0} приложений…'; app_sizes_done = 'Оценка размера готова: найдено {0} из {1} папок приложений.'; size_approx_prefix = '≈ '
         no_targets = 'нет данных'; today = 'сегодня'; days_ago = '{0} дн. назад'; months_ago = '{0} мес. назад'; years_ago = '{0} г. назад'; bytes = 'Б'; kb = 'КБ'; mb = 'МБ'; gb = 'ГБ'
         target_user_temp = 'Временные файлы пользователя'; target_crash = 'Старые отчёты о сбоях'; target_windows_temp = 'Временные файлы Windows'; age_24h = 'изменены >24 ч. назад, доступ >90 дн.'; age_30d = 'изменены >30 дн. назад, доступ >90 дн.'; age_limited = 'оценка ограничена; проверка не полная'; files_count = '{0}; файлов: {1}'
         advice_temp_clean = 'Можно очистить старые файлы через вкладку «Очистка». Не удаляйте саму папку.'; advice_temp_empty = 'Это известная временная папка, но подходящих старых файлов нет. Саму папку оставьте.'
@@ -256,12 +324,12 @@ $script:Texts = @{
         cleanup_note = 'Old files in known temporary folders and crash reports are suggested. Windows last-access timestamps may be inaccurate.'; scan_large = 'Scan drive for large folders'; open_folder = 'Open selected folder'; large_folder = 'Folder'; size = 'Size'; recommendation = 'Recommendation'; large_note = 'The app does not delete regular folders. If a folder has not been accessed recently, inspect its contents first.'
         refresh_apps = 'Refresh list'; search = 'Search:'; show = 'Show:'; filter_all = 'All apps'; filter_user = 'Current user'; filter_all_users = 'All users'; windows_button = 'Store / Windows…'; uninstall_button = 'Uninstall selected…'
         col_name = 'Name'; col_scope = 'Installed for'; col_source = 'Source'; col_size = 'Size*'; col_version = 'Version'; col_publisher = 'Publisher'; col_location = 'Install folder'
-        apps_note = 'Select one or more apps and choose “Uninstall selected”. Their standard uninstallers will run one at a time; use Windows for Store apps and entries without a standard uninstall command.'
-        app_count = 'Found: {0}; shown: {1}. You can select multiple apps. Size is an installer estimate when available.'
+        apps_note = 'Select apps and choose “Uninstall selected”. Standard uninstallers run one at a time; Windows handles Store apps and entries without a standard command. If an installer did not report a size, the app measures its install folder; ≈ marks this folder-based estimate or a partial scan.'
+        app_count = 'Found: {0}; shown: {1}. You can select multiple apps. Size comes from installer data or an estimate of the app folder.'
         scope_user = 'Current user'; scope_all = 'All users'; source_program = 'Desktop app'; source_store = 'Microsoft Store'
         cleanup_empty = 'No known temporary folders were found on this drive'; cleanup_hint = 'See the Large folders tab'; cleanup_hint_change = 'Choose another drive or see Large folders'; cleanup_none = 'No known temporary folders were found on the selected drive.'
         cleanup_estimating = 'Estimating old files in temporary folders…'; drive_scanning = 'Scanning {0}. Large drives may take a few minutes…'; cleanup_done = 'Temporary-file estimate refreshed.'; drive_done = 'Drive scan finished.'; scan_error = 'Scan error: {0}'
-        app_loading = 'Loading installed apps…'; app_loaded = 'App catalog is ready. Select an app to inspect or uninstall it.'; app_refreshing = 'Loading registered apps…'; app_refreshed = 'App list refreshed.'
+        app_loading = 'Loading installed apps…'; app_loaded = 'App catalog is ready. Select an app to inspect or uninstall it.'; app_refreshing = 'Loading registered apps…'; app_refreshed = 'App list refreshed.'; app_sizes_scanning = 'Calculating folder sizes for {0} apps…'; app_sizes_done = 'Size estimate complete: found folders for {0} of {1} apps.'; size_approx_prefix = '≈ '
         no_targets = 'no data'; today = 'today'; days_ago = '{0} days ago'; months_ago = '{0} months ago'; years_ago = '{0} years ago'; bytes = 'B'; kb = 'KB'; mb = 'MB'; gb = 'GB'
         target_user_temp = 'User temporary files'; target_crash = 'Old crash reports'; target_windows_temp = 'Windows temporary files'; age_24h = 'modified >24 hours ago, accessed >90 days ago'; age_30d = 'modified >30 days ago, accessed >90 days ago'; age_limited = 'estimate limited; scan incomplete'; files_count = '{0}; files: {1}'
         advice_temp_clean = 'Old files can be cleaned from the Cleanup tab. Keep the folder itself.'; advice_temp_empty = 'This is a known temporary folder, but no files meet the age criteria. Keep the folder itself.'
@@ -430,7 +498,7 @@ function Get-InstalledApps {
             if ($app.EstimatedSize) { try { $estimatedBytes = [long]$app.EstimatedSize * 1KB } catch { } }
             $uninstallCommand = [string]$app.UninstallString
             $iconPath = Resolve-AppIconPath ([string]$app.DisplayIcon) $installLocation $uninstallCommand $false
-            $apps.Add([pscustomobject]@{ Name = $name; Scope = $scope; Source = $source.Source; Version = $version; Publisher = [string]$app.Publisher; Location = $installLocation; EstimatedBytes = $estimatedBytes; UninstallCommand = $uninstallCommand; IconPath = $iconPath })
+            $apps.Add([pscustomobject]@{ Name = $name; Scope = $scope; Source = $source.Source; Version = $version; Publisher = [string]$app.Publisher; Location = $installLocation; EstimatedBytes = $estimatedBytes; SizeIsFolderEstimate = $false; SizeIsPartial = $false; UninstallCommand = $uninstallCommand; IconPath = $iconPath })
         }
     }
     try {
@@ -444,7 +512,7 @@ function Get-InstalledApps {
             $seen[$key] = $true
             $installLocation = [string]$package.InstallLocation
             $iconPath = Resolve-AppIconPath '' $installLocation '' $true
-            $apps.Add([pscustomobject]@{ Name = $name; Scope = 'user'; Source = 'store'; Version = $version; Publisher = [string]$package.PublisherDisplayName; Location = $installLocation; EstimatedBytes = 0L; UninstallCommand = ''; IconPath = $iconPath })
+            $apps.Add([pscustomobject]@{ Name = $name; Scope = 'user'; Source = 'store'; Version = $version; Publisher = [string]$package.PublisherDisplayName; Location = $installLocation; EstimatedBytes = 0L; SizeIsFolderEstimate = $false; SizeIsPartial = $false; UninstallCommand = ''; IconPath = $iconPath })
         }
     } catch { }
     return @($apps | Sort-Object Name, Scope)
@@ -672,7 +740,11 @@ function Render-Apps {
     $rows = $rows | Sort-Object @{ Expression = { if ($_.EstimatedBytes -gt 0) { 0 } else { 1 } } }, @{ Expression = 'EstimatedBytes'; Descending = $true }, Name
     $rowIndex = 0
     foreach ($app in $rows) {
-        $size = if ($app.EstimatedBytes -gt 0) { Format-Bytes $app.EstimatedBytes } else { '—' }
+        $size = '—'
+        if ($app.EstimatedBytes -gt 0) {
+            $sizePrefix = if ($app.SizeIsFolderEstimate -or $app.SizeIsPartial) { T 'size_approx_prefix' } else { '' }
+            $size = $sizePrefix + (Format-Bytes $app.EstimatedBytes)
+        }
         $scopeText = if ($app.Scope -eq 'user') { T 'scope_user' } else { T 'scope_all' }
         $sourceText = if ($app.Source -eq 'store') { T 'source_store' } else { T 'source_program' }
         $item = [System.Windows.Forms.ListViewItem]::new([string]$app.Name, (Get-AppImageKey $app))
@@ -710,7 +782,9 @@ function Start-CleanupEstimate {
     $script:PendingKind = 'cleanup'
     $cleanupRefreshButton.Enabled = $false
     $cleanSelectedButton.Enabled = $false
+    $appsRefreshButton.Enabled = $false
     $driveCombo.Enabled = $false
+    $driveChevron.Enabled = $false
     $statusLabel.Text = T 'cleanup_estimating'
     $script:ScanTimer.Start()
 }
@@ -727,9 +801,62 @@ function Start-DriveScan {
     $script:PendingTask = [CleanerScanner]::StartDrive($root, $paths, $names, $hours, $accessDays, 300000)
     $script:PendingKind = 'drive'
     $scanDriveButton.Enabled = $false
+    $appsRefreshButton.Enabled = $false
     $driveCombo.Enabled = $false
+    $driveChevron.Enabled = $false
     $statusLabel.Text = (T 'drive_scanning') -f $root
     $script:ScanTimer.Start()
+}
+
+function Start-AppSizeScan {
+    if ($script:PendingTask -and -not $script:PendingTask.IsCompleted) { return }
+    $jobs = New-Object 'System.Collections.Generic.List[object]'
+    $seenPaths = @{}
+    foreach ($app in $script:AppRows) {
+        if ($app.EstimatedBytes -gt 0) { continue }
+        $location = [Environment]::ExpandEnvironmentVariables([string]$app.Location)
+        if ([string]::IsNullOrWhiteSpace($location) -and $app.IconPath) {
+            $iconExtension = [System.IO.Path]::GetExtension([string]$app.IconPath).ToLowerInvariant()
+            if ($iconExtension -in @('.exe', '.dll')) { $location = [System.IO.Path]::GetDirectoryName([string]$app.IconPath) }
+        }
+        try {
+            if (-not $location -or -not (Test-Path -LiteralPath $location -PathType Container)) { continue }
+            $location = [System.IO.Path]::GetFullPath($location).TrimEnd('\')
+            if ($location.Length -lt 4) { continue }
+            $root = [System.IO.Path]::GetPathRoot($location).TrimEnd('\')
+            if ($location -ieq $root) { continue }
+            $driveRoot = [System.IO.Path]::GetPathRoot($location)
+            $localDrive = @([System.IO.DriveInfo]::GetDrives() | Where-Object { $_.RootDirectory.FullName -ieq $driveRoot -and $_.IsReady -and $_.DriveType -in @([System.IO.DriveType]::Fixed, [System.IO.DriveType]::Removable) })
+            if ($localDrive.Count -eq 0) { continue }
+            $broadRoots = @($env:windir, $env:ProgramFiles, [Environment]::GetEnvironmentVariable('ProgramFiles(x86)'), $env:ProgramData, $env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA) | Where-Object { $_ }
+            if ($broadRoots | Where-Object { $location -ieq ([string]$_).TrimEnd('\') }) { continue }
+            if ($seenPaths.ContainsKey($location)) { continue }
+            $seenPaths[$location] = $true
+            $jobs.Add([pscustomobject]@{ App = $app; Path = $location })
+        } catch { }
+    }
+    if ($jobs.Count -eq 0) { return }
+    $script:AppSizeTaskRows = @($jobs.ToArray())
+    $paths = [string[]]@($script:AppSizeTaskRows | ForEach-Object { $_.Path })
+    $script:PendingTask = [CleanerAppSizeScanner]::Start($paths, 80000, 800000)
+    $script:PendingKind = 'appSizes'
+    $appsRefreshButton.Enabled = $false
+    $driveCombo.Enabled = $false
+    $driveChevron.Enabled = $false
+    $statusLabel.Text = (T 'app_sizes_scanning') -f $paths.Length
+    $script:ScanTimer.Start()
+}
+
+function Start-NextStartupScan {
+    if ($script:StartupScanQueue.Count -eq 0) { return }
+    $nextScan = [string]$script:StartupScanQueue.Dequeue()
+    if ($nextScan -eq 'drive') {
+        Start-DriveScan
+        if ($script:PendingKind -ne 'drive') { Start-NextStartupScan }
+    } elseif ($nextScan -eq 'appSizes') {
+        Start-AppSizeScan
+        if ($script:PendingKind -ne 'appSizes') { Start-NextStartupScan }
+    }
 }
 
 function Remove-SafeTargetFiles($Target) {
@@ -1134,7 +1261,7 @@ $sidebar.Controls.Add($navHeading)
 
 function New-SidebarNavButton([string]$Glyph) {
     $button = [System.Windows.Forms.Button]::new()
-    $button.Text = $Glyph
+    $button.Text = ''
     $button.Size = [System.Drawing.Size]::new(242, 42)
     $button.FlatStyle = 'Flat'
     $button.FlatAppearance.BorderSize = 0
@@ -1149,6 +1276,79 @@ function New-SidebarNavButton([string]$Glyph) {
     return $button
 }
 
+function Add-VectorIcon($Button, [string]$Kind) {
+    $Button.Padding = [System.Windows.Forms.Padding]::new(42, 0, 6, 0)
+    $iconKind = $Kind
+    $paintIcon = {
+        param($sender, $eventArgs)
+        $g = $eventArgs.Graphics
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $pen = [System.Drawing.Pen]::new($sender.ForeColor, 1.8)
+        $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $x = 16
+        $y = [int](($sender.Height - 18) / 2)
+        switch ($iconKind) {
+            'apps' {
+                $g.DrawRectangle($pen, $x, $y + 1, 6, 6); $g.DrawRectangle($pen, $x + 9, $y + 1, 6, 6)
+                $g.DrawRectangle($pen, $x, $y + 10, 6, 6); $g.DrawRectangle($pen, $x + 9, $y + 10, 6, 6)
+            }
+            'clean' {
+                $g.DrawLine($pen, $x + 2, $y + 15, $x + 13, $y + 4)
+                $g.DrawLine($pen, $x + 10, $y + 2, $x + 13, $y + 5); $g.DrawLine($pen, $x + 13, $y + 5, $x + 16, $y + 2)
+                $g.DrawLine($pen, $x + 13, $y + 5, $x + 10, $y + 8); $g.DrawLine($pen, $x + 13, $y + 5, $x + 16, $y + 8)
+                $g.DrawLine($pen, $x + 2, $y + 2, $x + 5, $y + 2); $g.DrawLine($pen, $x + 3.5, $y + 0.5, $x + 3.5, $y + 3.5)
+            }
+            'folders' {
+                $g.DrawLine($pen, $x + 1, $y + 5, $x + 7, $y + 5); $g.DrawLine($pen, $x + 7, $y + 5, $x + 9, $y + 8)
+                $g.DrawLine($pen, $x + 9, $y + 8, $x + 16, $y + 8); $g.DrawRectangle($pen, $x + 1, $y + 5, 15, 10)
+                $g.DrawLine($pen, $x + 3, $y + 2, $x + 9, $y + 2); $g.DrawLine($pen, $x + 9, $y + 2, $x + 11, $y + 5)
+            }
+            'advice' {
+                $g.DrawEllipse($pen, $x + 1, $y + 1, 15, 15); $g.DrawLine($pen, $x + 8.5, $y + 7, $x + 8.5, $y + 12)
+                $dotBrush = [System.Drawing.SolidBrush]::new($sender.ForeColor)
+                $g.FillEllipse($dotBrush, $x + 7.6, $y + 3.5, 1.8, 1.8)
+                $dotBrush.Dispose()
+            }
+            'refresh' {
+                $g.DrawArc($pen, $x + 1, $y + 1, 15, 15, 42, 286); $g.DrawLine($pen, $x + 12, $y + 1, $x + 16, $y + 2)
+                $g.DrawLine($pen, $x + 16, $y + 2, $x + 14, $y + 6)
+            }
+            'trash' {
+                $g.DrawRectangle($pen, $x + 3, $y + 5, 12, 11); $g.DrawLine($pen, $x + 1, $y + 3, $x + 17, $y + 3)
+                $g.DrawLine($pen, $x + 6, $y + 1, $x + 12, $y + 1); $g.DrawLine($pen, $x + 7, $y + 8, $x + 7, $y + 13)
+                $g.DrawLine($pen, $x + 11, $y + 8, $x + 11, $y + 13)
+            }
+            'settings' {
+                foreach ($lineY in @(3, 9, 15)) { $g.DrawLine($pen, $x + 1, $y + $lineY, $x + 16, $y + $lineY) }
+                $nodeBrush = [System.Drawing.SolidBrush]::new($sender.ForeColor)
+                $g.FillEllipse($nodeBrush, $x + 4, $y + 1, 4, 4); $g.FillEllipse($nodeBrush, $x + 11, $y + 7, 4, 4)
+                $g.FillEllipse($nodeBrush, $x + 6, $y + 13, 4, 4); $nodeBrush.Dispose()
+            }
+            'scan' {
+                $g.DrawEllipse($pen, $x + 1, $y + 1, 11, 11); $g.DrawLine($pen, $x + 10, $y + 11, $x + 17, $y + 18)
+            }
+            'broom' {
+                $g.DrawLine($pen, $x + 13, $y + 1, $x + 5, $y + 11); $g.DrawLine($pen, $x + 4, $y + 10, $x + 1, $y + 15)
+                $g.DrawLine($pen, $x + 1, $y + 15, $x + 7, $y + 17); $g.DrawLine($pen, $x + 7, $y + 17, $x + 10, $y + 12)
+                $g.DrawLine($pen, $x + 4, $y + 13, $x + 7, $y + 15)
+            }
+            'recycle' {
+                $g.DrawRectangle($pen, $x + 4, $y + 6, 11, 10); $g.DrawLine($pen, $x + 2, $y + 4, $x + 17, $y + 4)
+                $g.DrawLine($pen, $x + 7, $y + 2, $x + 12, $y + 2); $g.DrawLine($pen, $x + 8, $y + 9, $x + 8, $y + 13)
+                $g.DrawLine($pen, $x + 12, $y + 9, $x + 12, $y + 13)
+            }
+            'openFolder' {
+                $g.DrawLine($pen, $x + 1, $y + 5, $x + 7, $y + 5); $g.DrawLine($pen, $x + 7, $y + 5, $x + 9, $y + 8)
+                $g.DrawLine($pen, $x + 9, $y + 8, $x + 17, $y + 8); $g.DrawLine($pen, $x + 17, $y + 8, $x + 15, $y + 16)
+                $g.DrawLine($pen, $x + 15, $y + 16, $x + 1, $y + 16); $g.DrawLine($pen, $x + 1, $y + 16, $x + 1, $y + 5)
+            }
+        }
+        $pen.Dispose()
+    }.GetNewClosure()
+    $Button.Add_Paint($paintIcon)
+}
+
 $navApps = New-SidebarNavButton '▦'
 $navCleanup = New-SidebarNavButton '✧'
 $navLarge = New-SidebarNavButton '▤'
@@ -1158,6 +1358,10 @@ $navCleanup.Location = [System.Drawing.Point]::new(14, 170)
 $navLarge.Location = [System.Drawing.Point]::new(14, 216)
 $navAdvice.Location = [System.Drawing.Point]::new(14, 262)
 foreach ($nav in @($navApps, $navCleanup, $navLarge, $navAdvice)) { $sidebar.Controls.Add($nav) }
+Add-VectorIcon $navApps 'apps'
+Add-VectorIcon $navCleanup 'clean'
+Add-VectorIcon $navLarge 'folders'
+Add-VectorIcon $navAdvice 'advice'
 
 $activeMarker = [System.Windows.Forms.Panel]::new()
 $activeMarker.Size = [System.Drawing.Size]::new(3, 28)
@@ -1181,6 +1385,14 @@ foreach ($button in $script:SidebarActionButtons) {
     $button.Visible = $false
     $sidebar.Controls.Add($button)
 }
+Add-VectorIcon $appsRefreshButton 'refresh'
+Add-VectorIcon $uninstallSelectedButton 'trash'
+Add-VectorIcon $manageAppsButton 'settings'
+Add-VectorIcon $cleanupRefreshButton 'refresh'
+Add-VectorIcon $cleanSelectedButton 'broom'
+Add-VectorIcon $binButton 'recycle'
+Add-VectorIcon $scanDriveButton 'scan'
+Add-VectorIcon $openFolderButton 'openFolder'
 
 $driveCaption.Text = ''
 $driveCaption.AutoSize = $false
@@ -1188,24 +1400,100 @@ $driveCaption.Size = [System.Drawing.Size]::new(236, 22)
 $driveCaption.ForeColor = [System.Drawing.Color]::FromArgb(125, 146, 172)
 $driveCaption.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 8)
 $driveCombo.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+$driveCombo.Size = [System.Drawing.Size]::new(242, 36)
 $driveInfoLabel.AutoSize = $false
 $driveInfoLabel.Size = [System.Drawing.Size]::new(236, 42)
 $driveInfoLabel.Font = [System.Drawing.Font]::new('Segoe UI', 8.5)
 $driveInfoLabel.TextAlign = 'TopLeft'
 $languageLabel.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 8)
 $languageCombo.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+$languageCombo.Size = [System.Drawing.Size]::new(242, 36)
 foreach ($control in @($driveCaption, $driveCombo, $driveInfoLabel, $languageLabel, $languageCombo)) { $sidebar.Controls.Add($control) }
 
 $script:SidebarNav = @(
-    [pscustomobject]@{ Button = $navApps; Page = $appsTab; Glyph = '▦'; TextKey = 'tab_apps' }
-    [pscustomobject]@{ Button = $navCleanup; Page = $cleanupTab; Glyph = '✧'; TextKey = 'tab_cleanup' }
-    [pscustomobject]@{ Button = $navLarge; Page = $largeTab; Glyph = '▤'; TextKey = 'tab_large' }
-    [pscustomobject]@{ Button = $navAdvice; Page = $adviceTab; Glyph = 'ⓘ'; TextKey = 'tab_advice' }
+    [pscustomobject]@{ Button = $navApps; Page = $appsTab; TextKey = 'tab_apps' }
+    [pscustomobject]@{ Button = $navCleanup; Page = $cleanupTab; TextKey = 'tab_cleanup' }
+    [pscustomobject]@{ Button = $navLarge; Page = $largeTab; TextKey = 'tab_large' }
+    [pscustomobject]@{ Button = $navAdvice; Page = $adviceTab; TextKey = 'tab_advice' }
 )
 
 $driveCombo.DisplayMember = 'Display'
 $driveCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
 $languageCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+
+function Set-ChoiceComboStyle($Combo, [string]$Kind) {
+    $Combo.DrawMode = 'OwnerDrawFixed'
+    $Combo.ItemHeight = 29
+    $Combo.IntegralHeight = $false
+    $Combo.DropDownHeight = 230
+    $choiceKind = $Kind
+    $Combo.Add_DrawItem({
+        param($sender, $eventArgs)
+        if ($eventArgs.Index -ge 0) { $choice = $sender.Items[$eventArgs.Index] } else { $choice = $sender.SelectedItem }
+        if ($null -eq $choice) { return }
+        $graphics = $eventArgs.Graphics
+        $selected = (($eventArgs.State -band [System.Windows.Forms.DrawItemState]::Selected) -ne 0)
+        $background = if ($selected) { [System.Drawing.Color]::FromArgb(235, 243, 255) } else { [System.Drawing.Color]::White }
+        $foreground = [System.Drawing.Color]::FromArgb(31, 41, 55)
+        $backgroundBrush = [System.Drawing.SolidBrush]::new($background)
+        $graphics.FillRectangle($backgroundBrush, $eventArgs.Bounds)
+        $backgroundBrush.Dispose()
+        $iconPen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(37, 99, 235), 1.7)
+        $iconPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round; $iconPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $iconX = $eventArgs.Bounds.X + 9
+        $iconY = $eventArgs.Bounds.Y + [int](($eventArgs.Bounds.Height - 16) / 2)
+        if ($choiceKind -eq 'drive') {
+            $graphics.DrawRectangle($iconPen, $iconX, $iconY + 2, 18, 12)
+            $graphics.DrawLine($iconPen, $iconX + 2, $iconY + 6, $iconX + 16, $iconY + 6)
+            $driveLightBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(37, 99, 235))
+            $graphics.FillEllipse($driveLightBrush, $iconX + 3, $iconY + 10, 2, 2); $graphics.FillEllipse($driveLightBrush, $iconX + 7, $iconY + 10, 2, 2)
+            $driveLightBrush.Dispose()
+        } else {
+            $graphics.DrawEllipse($iconPen, $iconX + 1, $iconY, 16, 16)
+            $graphics.DrawEllipse($iconPen, $iconX + 5, $iconY, 8, 16)
+            $graphics.DrawLine($iconPen, $iconX + 2, $iconY + 5, $iconX + 16, $iconY + 5)
+            $graphics.DrawLine($iconPen, $iconX + 2, $iconY + 11, $iconX + 16, $iconY + 11)
+        }
+        $iconPen.Dispose()
+        $display = if ($choice -is [string]) { [string]$choice } else { [string]$choice.Display }
+        $textBrush = [System.Drawing.SolidBrush]::new($foreground)
+        $textFont = [System.Drawing.Font]::new('Segoe UI', 9.5)
+        $textBounds = [System.Drawing.RectangleF]::new([single]($eventArgs.Bounds.X + 36), [single]$eventArgs.Bounds.Y, [single]($eventArgs.Bounds.Width - 65), [single]$eventArgs.Bounds.Height)
+        $graphics.DrawString($display, $textFont, $textBrush, $textBounds, [System.Drawing.StringFormat]::GenericDefault)
+        $textFont.Dispose(); $textBrush.Dispose()
+        if ($selected) { $eventArgs.DrawFocusRectangle() }
+    }.GetNewClosure())
+}
+
+function New-ChoiceChevron($Combo) {
+    $arrow = [System.Windows.Forms.Button]::new()
+    $arrow.Size = [System.Drawing.Size]::new(27, 27)
+    $arrow.FlatStyle = 'Flat'
+    $arrow.FlatAppearance.BorderSize = 0
+    $arrow.BackColor = [System.Drawing.Color]::White
+    $arrow.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
+    $arrow.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $arrow.TabStop = $false
+    $arrow.Add_Paint({
+        param($sender, $eventArgs)
+        $pen = [System.Drawing.Pen]::new($sender.ForeColor, 1.8)
+        $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round; $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $centerX = [single]($sender.Width / 2); $centerY = [single]($sender.Height / 2)
+        $eventArgs.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $eventArgs.Graphics.DrawLines($pen, [System.Drawing.PointF[]]@([System.Drawing.PointF]::new($centerX - 4, $centerY - 2), [System.Drawing.PointF]::new($centerX, $centerY + 2), [System.Drawing.PointF]::new($centerX + 4, $centerY - 2)))
+        $pen.Dispose()
+    })
+    $arrow.Add_Click({ if ($Combo.Enabled) { $Combo.DroppedDown = $true } }.GetNewClosure())
+    return $arrow
+}
+
+Set-ChoiceComboStyle $driveCombo 'drive'
+Set-ChoiceComboStyle $languageCombo 'language'
+$driveChevron = New-ChoiceChevron $driveCombo
+$languageChevron = New-ChoiceChevron $languageCombo
+$sidebar.Controls.Add($driveChevron)
+$sidebar.Controls.Add($languageChevron)
+$driveChevron.BringToFront(); $languageChevron.BringToFront()
 
 $adviceText = [System.Windows.Forms.RichTextBox]::new()
 $adviceText.ReadOnly = $true
@@ -1298,10 +1586,14 @@ function Update-WindowLayout {
     $statusPanel.Size = [System.Drawing.Size]::new([Math]::Max(300, $clientWidth - 270), 54)
     $statusLabel.Size = [System.Drawing.Size]::new([Math]::Max(240, $statusPanel.ClientSize.Width - 44), 24)
     $driveCaption.Location = [System.Drawing.Point]::new(18, $clientHeight - 198)
-    $driveCombo.Location = [System.Drawing.Point]::new(16, $clientHeight - 174)
+    $driveCombo.Location = [System.Drawing.Point]::new(14, $clientHeight - 174)
+    $driveCombo.Size = [System.Drawing.Size]::new(242, 36)
     $driveInfoLabel.Location = [System.Drawing.Point]::new(18, $clientHeight - 137)
     $languageLabel.Location = [System.Drawing.Point]::new(18, $clientHeight - 82)
-    $languageCombo.Location = [System.Drawing.Point]::new(16, $clientHeight - 60)
+    $languageCombo.Location = [System.Drawing.Point]::new(14, $clientHeight - 60)
+    $languageCombo.Size = [System.Drawing.Size]::new(242, 36)
+    $driveChevron.Location = [System.Drawing.Point]::new($driveCombo.Left + $driveCombo.Width - 30, $driveCombo.Top + 4)
+    $languageChevron.Location = [System.Drawing.Point]::new($languageCombo.Left + $languageCombo.Width - 30, $languageCombo.Top + 4)
 }
 
 $script:ActiveMarkerTargetY = $navApps.Top + 7
@@ -1391,7 +1683,7 @@ function Set-UiLanguage([string]$Language) {
     }
     if ($script:LastDriveResult) { Render-DriveScan $script:LastDriveResult }
     if ($script:AppRows.Count -gt 0) { $statusLabel.Text = T 'app_loaded' }
-    foreach ($entry in $script:SidebarNav) { $entry.Button.Text = $entry.Glyph + '   ' + (T $entry.TextKey) }
+    foreach ($entry in $script:SidebarNav) { $entry.Button.Text = T $entry.TextKey }
     Update-SidebarSelection
 }
 
@@ -1427,28 +1719,49 @@ $script:ScanTimer.Interval = 400
 $script:ScanTimer.Add_Tick({
     if ($null -eq $script:PendingTask -or -not $script:PendingTask.IsCompleted) { return }
     $script:ScanTimer.Stop()
+    $finishedKind = $script:PendingKind
+    $finishedTask = $script:PendingTask
     $driveCombo.Enabled = $true
+    $driveChevron.Enabled = $true
+    $appsRefreshButton.Enabled = $true
     if ($script:PendingKind -eq 'cleanup') { $cleanupRefreshButton.Enabled = $true; $cleanSelectedButton.Enabled = $true }
     if ($script:PendingKind -eq 'drive') { $scanDriveButton.Enabled = $true }
+    if ($script:PendingKind -eq 'appSizes') { $appsRefreshButton.Enabled = $true }
     $form.UseWaitCursor = $false
-    if ($script:PendingTask.IsFaulted) {
-        $statusLabel.Text = (T 'scan_error') -f $script:PendingTask.Exception.GetBaseException().Message
-        return
-    }
-    if ($script:PendingKind -eq 'cleanup') {
-        Render-CleanupRows $script:PendingTask.Result
+    if ($finishedTask.IsFaulted) {
+        $statusLabel.Text = (T 'scan_error') -f $finishedTask.Exception.GetBaseException().Message
+    } elseif ($finishedKind -eq 'cleanup') {
+        Render-CleanupRows $finishedTask.Result
         $statusLabel.Text = T 'cleanup_done'
-    } elseif ($script:PendingKind -eq 'drive') {
-        Render-DriveScan $script:PendingTask.Result
+    } elseif ($finishedKind -eq 'drive') {
+        Render-DriveScan $finishedTask.Result
         $statusLabel.Text = T 'drive_done'
         $cleanupRefreshButton.Enabled = $true
+    } elseif ($finishedKind -eq 'appSizes') {
+        $results = $finishedTask.Result
+        $found = 0
+        foreach ($result in $results) {
+            if ($result.Index -lt 0 -or $result.Index -ge $script:AppSizeTaskRows.Count) { continue }
+            $app = $script:AppSizeTaskRows[$result.Index].App
+            if ($result.Bytes -gt 0) {
+                $app.EstimatedBytes = [long]$result.Bytes
+                $app.SizeIsFolderEstimate = $true
+                $app.SizeIsPartial = [bool]$result.Partial
+                $found++
+            }
+        }
+        Render-Apps
+        $statusLabel.Text = (T 'app_sizes_done') -f $found, $script:AppSizeTaskRows.Count
     }
+    $script:PendingTask = $null
     $script:PendingKind = ''
+    if ($finishedKind -in @('cleanup', 'drive')) { Start-NextStartupScan }
 })
 
 $driveCombo.Add_SelectedIndexChanged({
     Refresh-DriveState
     if ($tabs.SelectedTab -eq $cleanupTab) { Start-CleanupEstimate }
+    elseif ($tabs.SelectedTab -eq $largeTab) { Start-DriveScan }
 })
 $tabs.Add_SelectedIndexChanged({
     Update-SidebarSelection
@@ -1508,6 +1821,7 @@ $appsRefreshButton.Add_Click({
     $script:AppRows = @(Get-InstalledApps)
     Render-Apps
     $statusLabel.Text = T 'app_refreshed'
+    Start-AppSizeScan
 })
 $appsFilter.Add_SelectedIndexChanged({ Render-Apps })
 $uninstallSelectedButton.Add_Click({
@@ -1564,6 +1878,10 @@ $form.Add_Shown({
         Render-Apps
         $statusLabel.Text = T 'app_loaded'
     }
+    $script:StartupScanQueue.Clear()
+    $script:StartupScanQueue.Enqueue('drive')
+    $script:StartupScanQueue.Enqueue('appSizes')
     Start-CleanupEstimate
+    if ($script:PendingKind -ne 'cleanup') { Start-NextStartupScan }
 })
 [void]$form.ShowDialog()
