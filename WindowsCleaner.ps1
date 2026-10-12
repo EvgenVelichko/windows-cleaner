@@ -278,6 +278,8 @@ public sealed class CleanerUninstallJob
 
 $script:PendingTask = $null
 $script:PendingKind = ''
+$script:QueuedDriveScan = $false
+$script:QueuedCleanupScan = $false
 $script:AppRows = @()
 $script:SafeTargets = @()
 $script:LastCleanupRows = @()
@@ -298,7 +300,7 @@ $script:Texts = @{
         app_count = 'Найдено: {0}; показано: {1}. Можно выбрать несколько программ. Размер берётся из данных установщика или оценивается по папке приложения.'
         scope_user = 'Пользовательская'; scope_all = 'Для всех пользователей'; source_program = 'Обычная программа'; source_store = 'Microsoft Store'
         cleanup_empty = 'На выбранном диске нет известных временных папок'; cleanup_hint = 'Проверьте вкладку «Большие папки»'; cleanup_hint_change = 'Смените диск или проверьте вкладку «Большие папки»'; cleanup_none = 'Не найдено известных временных папок на выбранном диске.'
-        cleanup_estimating = 'Подсчитываю старые файлы во временных папках…'; drive_scanning = 'Сканирую {0}. На большом диске это может занять несколько минут…'; cleanup_done = 'Оценка временных файлов обновлена.'; drive_done = 'Сканирование диска завершено.'; scan_error = 'Ошибка сканирования: {0}'
+        cleanup_estimating = 'Подсчитываю старые файлы во временных папках…'; drive_scanning = 'Сканирую {0}. На большом диске это может занять несколько минут…'; scan_queued = 'Следующая проверка начнётся после завершения текущей.'; cleanup_done = 'Оценка временных файлов обновлена.'; drive_done = 'Сканирование диска завершено.'; scan_error = 'Ошибка сканирования: {0}'
         app_loading = 'Загружаю каталог установленных программ…'; app_loaded = 'Каталог программ готов. Выберите приложение для просмотра или удаления.'; app_refreshing = 'Загружаю список зарегистрированных программ…'; app_refreshed = 'Список программ обновлён.'; app_sizes_scanning = 'Считаю размер папок {0} приложений…'; app_sizes_done = 'Оценка размера готова: найдено {0} из {1} папок приложений.'; size_approx_prefix = '≈ '
         no_targets = 'нет данных'; today = 'сегодня'; days_ago = '{0} дн. назад'; months_ago = '{0} мес. назад'; years_ago = '{0} г. назад'; bytes = 'Б'; kb = 'КБ'; mb = 'МБ'; gb = 'ГБ'
         target_user_temp = 'Временные файлы пользователя'; target_crash = 'Старые отчёты о сбоях'; target_windows_temp = 'Временные файлы Windows'; age_24h = 'изменены >24 ч. назад, доступ >90 дн.'; age_30d = 'изменены >30 дн. назад, доступ >90 дн.'; age_limited = 'оценка ограничена; проверка не полная'; files_count = '{0}; файлов: {1}'
@@ -328,7 +330,7 @@ $script:Texts = @{
         app_count = 'Found: {0}; shown: {1}. You can select multiple apps. Size comes from installer data or an estimate of the app folder.'
         scope_user = 'Current user'; scope_all = 'All users'; source_program = 'Desktop app'; source_store = 'Microsoft Store'
         cleanup_empty = 'No known temporary folders were found on this drive'; cleanup_hint = 'See the Large folders tab'; cleanup_hint_change = 'Choose another drive or see Large folders'; cleanup_none = 'No known temporary folders were found on the selected drive.'
-        cleanup_estimating = 'Estimating old files in temporary folders…'; drive_scanning = 'Scanning {0}. Large drives may take a few minutes…'; cleanup_done = 'Temporary-file estimate refreshed.'; drive_done = 'Drive scan finished.'; scan_error = 'Scan error: {0}'
+        cleanup_estimating = 'Estimating old files in temporary folders…'; drive_scanning = 'Scanning {0}. Large drives may take a few minutes…'; scan_queued = 'The next scan will start when the current one finishes.'; cleanup_done = 'Temporary-file estimate refreshed.'; drive_done = 'Drive scan finished.'; scan_error = 'Scan error: {0}'
         app_loading = 'Loading installed apps…'; app_loaded = 'App catalog is ready. Select an app to inspect or uninstall it.'; app_refreshing = 'Loading registered apps…'; app_refreshed = 'App list refreshed.'; app_sizes_scanning = 'Calculating folder sizes for {0} apps…'; app_sizes_done = 'Size estimate complete: found folders for {0} of {1} apps.'; size_approx_prefix = '≈ '
         no_targets = 'no data'; today = 'today'; days_ago = '{0} days ago'; months_ago = '{0} months ago'; years_ago = '{0} years ago'; bytes = 'B'; kb = 'KB'; mb = 'MB'; gb = 'GB'
         target_user_temp = 'User temporary files'; target_crash = 'Old crash reports'; target_windows_temp = 'Windows temporary files'; age_24h = 'modified >24 hours ago, accessed >90 days ago'; age_30d = 'modified >30 days ago, accessed >90 days ago'; age_limited = 'estimate limited; scan incomplete'; files_count = '{0}; files: {1}'
@@ -763,7 +765,7 @@ function Render-Apps {
 }
 
 function Start-CleanupEstimate {
-    if ($script:PendingTask -and -not $script:PendingTask.IsCompleted) { return }
+    if ($script:PendingTask -and -not $script:PendingTask.IsCompleted) { $script:QueuedCleanupScan = $true; $statusLabel.Text = T 'scan_queued'; return }
     $root = Get-SelectedDriveRoot
     if (-not $root) { return }
     $script:SafeTargets = @(Get-SafeTargetsForDrive $root)
@@ -783,14 +785,12 @@ function Start-CleanupEstimate {
     $cleanupRefreshButton.Enabled = $false
     $cleanSelectedButton.Enabled = $false
     $appsRefreshButton.Enabled = $false
-    $driveCombo.Enabled = $false
-    $driveChevron.Enabled = $false
     $statusLabel.Text = T 'cleanup_estimating'
     $script:ScanTimer.Start()
 }
 
 function Start-DriveScan {
-    if ($script:PendingTask -and -not $script:PendingTask.IsCompleted) { return }
+    if ($script:PendingTask -and -not $script:PendingTask.IsCompleted) { $script:QueuedDriveScan = $true; $statusLabel.Text = T 'scan_queued'; return }
     $root = Get-SelectedDriveRoot
     if (-not $root) { return }
     $script:SafeTargets = @(Get-SafeTargetsForDrive $root)
@@ -802,8 +802,6 @@ function Start-DriveScan {
     $script:PendingKind = 'drive'
     $scanDriveButton.Enabled = $false
     $appsRefreshButton.Enabled = $false
-    $driveCombo.Enabled = $false
-    $driveChevron.Enabled = $false
     $statusLabel.Text = (T 'drive_scanning') -f $root
     $script:ScanTimer.Start()
 }
@@ -841,8 +839,6 @@ function Start-AppSizeScan {
     $script:PendingTask = [CleanerAppSizeScanner]::Start($paths, 80000, 800000)
     $script:PendingKind = 'appSizes'
     $appsRefreshButton.Enabled = $false
-    $driveCombo.Enabled = $false
-    $driveChevron.Enabled = $false
     $statusLabel.Text = (T 'app_sizes_scanning') -f $paths.Length
     $script:ScanTimer.Start()
 }
@@ -1421,94 +1417,94 @@ $driveCombo.DisplayMember = 'Display'
 $driveCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
 $languageCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
 
-function Set-ChoiceComboRoundRegion($Combo) {
-    if ($Combo.Width -lt 20 -or $Combo.Height -lt 20) { return }
-    $radius = 9
-    $diameter = $radius * 2
-    $path = [System.Drawing.Drawing2D.GraphicsPath]::new()
-    $path.AddArc(0, 0, $diameter, $diameter, 180, 90)
-    $path.AddArc($Combo.Width - $diameter - 1, 0, $diameter, $diameter, 270, 90)
-    $path.AddArc($Combo.Width - $diameter - 1, $Combo.Height - $diameter - 1, $diameter, $diameter, 0, 90)
-    $path.AddArc(0, $Combo.Height - $diameter - 1, $diameter, $diameter, 90, 90)
-    $path.CloseFigure()
-    $newRegion = [System.Drawing.Region]::new($path)
-    $path.Dispose()
-    if ($Combo.Region) { $Combo.Region.Dispose() }
-    $Combo.Region = $newRegion
-}
-
-function New-ChoiceFrame($Combo) {
-    $frame = [System.Windows.Forms.Panel]::new()
-    $frame.Size = [System.Drawing.Size]::new(242, 42)
-    $frame.BackColor = [System.Drawing.Color]::FromArgb(21, 34, 53)
-    $frame.Tag = $false
-    $Combo.Location = [System.Drawing.Point]::new(3, 3)
-    $Combo.Size = [System.Drawing.Size]::new(236, 36)
-    $frame.Controls.Add($Combo)
-    $Combo.Add_SizeChanged({ Set-ChoiceComboRoundRegion $Combo }.GetNewClosure())
-    Set-ChoiceComboRoundRegion $Combo
-    $frame.Add_Paint({
+function New-ChoiceSelectorButton($Combo, [string]$Kind, [string]$Label) {
+    $button = [System.Windows.Forms.Button]::new()
+    $button.Size = [System.Drawing.Size]::new(242, 42)
+    $button.FlatStyle = 'Flat'
+    $button.FlatAppearance.BorderSize = 0
+    $button.UseVisualStyleBackColor = $false
+    $button.BackColor = [System.Drawing.Color]::FromArgb(21, 34, 53)
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $button.TabStop = $true
+    $button.AccessibleRole = [System.Windows.Forms.AccessibleRole]::ComboBox
+    $button.AccessibleName = $Label
+    $button.Enabled = $Combo.Enabled
+    $choiceKind = $Kind
+    $menu = [System.Windows.Forms.ContextMenuStrip]::new()
+    $menu.ShowCheckMargin = $false
+    $menu.ShowImageMargin = $false
+    $menu.BackColor = [System.Drawing.Color]::White
+    $menu.ForeColor = [System.Drawing.Color]::FromArgb(35, 52, 76)
+    $menu.Font = [System.Drawing.Font]::new('Segoe UI', 9.5)
+    $button.ContextMenuStrip = $menu
+    $menu.Add_Opening({
+        $menu.Items.Clear()
+        for ($itemIndex = 0; $itemIndex -lt $Combo.Items.Count; $itemIndex++) {
+            $choice = $Combo.Items[$itemIndex]
+            $itemText = if ($choice -is [string]) { [string]$choice } else { [string]$choice.Display }
+            $menuItem = [System.Windows.Forms.ToolStripMenuItem]::new($itemText)
+            if ($itemIndex -eq $Combo.SelectedIndex) { $menuItem.Font = [System.Drawing.Font]::new('Segoe UI Semibold', 9.5) }
+            $selectedIndex = $itemIndex
+            $menuItem.Add_Click({ $Combo.SelectedIndex = $selectedIndex }.GetNewClosure())
+            [void]$menu.Items.Add($menuItem)
+        }
+    }.GetNewClosure())
+    $button.Add_Click({
+        if ($Combo.Items.Count -gt 0 -and $button.Enabled) { $menu.Show($button, [System.Drawing.Point]::new(0, $button.Height)) }
+    }.GetNewClosure())
+    $button.Add_KeyDown({
+        param($sender, $eventArgs)
+        if ($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::Down -and $Combo.Items.Count -gt 0) {
+            $menu.Show($sender, [System.Drawing.Point]::new(0, $sender.Height))
+            $eventArgs.Handled = $true
+        }
+    }.GetNewClosure())
+    $button.Add_Paint({
         param($sender, $eventArgs)
         $graphics = $eventArgs.Graphics
         $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $bounds = [System.Drawing.Rectangle]::new(0, 0, $sender.Width - 1, $sender.Height - 1)
+        $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
+        $rect = [System.Drawing.Rectangle]::new(0, 0, $sender.Width - 1, $sender.Height - 1)
         $radius = 11
         $diameter = $radius * 2
         $path = [System.Drawing.Drawing2D.GraphicsPath]::new()
-        $path.AddArc($bounds.X, $bounds.Y, $diameter, $diameter, 180, 90)
-        $path.AddArc($bounds.Right - $diameter, $bounds.Y, $diameter, $diameter, 270, 90)
-        $path.AddArc($bounds.Right - $diameter, $bounds.Bottom - $diameter, $diameter, $diameter, 0, 90)
-        $path.AddArc($bounds.X, $bounds.Bottom - $diameter, $diameter, $diameter, 90, 90)
+        $path.AddArc($rect.X, $rect.Y, $diameter, $diameter, 180, 90)
+        $path.AddArc($rect.Right - $diameter, $rect.Y, $diameter, $diameter, 270, 90)
+        $path.AddArc($rect.Right - $diameter, $rect.Bottom - $diameter, $diameter, $diameter, 0, 90)
+        $path.AddArc($rect.X, $rect.Bottom - $diameter, $diameter, $diameter, 90, 90)
         $path.CloseFigure()
-        $surfaceBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
+        $pointerInside = $sender.ClientRectangle.Contains($sender.PointToClient([System.Windows.Forms.Control]::MousePosition))
+        if (-not $sender.Enabled) {
+            $surfaceColor = [System.Drawing.Color]::FromArgb(231, 237, 245)
+            $borderColor = [System.Drawing.Color]::FromArgb(208, 218, 231)
+            $contentColor = [System.Drawing.Color]::FromArgb(117, 134, 155)
+        } else {
+            $surfaceColor = [System.Drawing.Color]::White
+            if ($sender.Focused) { $borderColor = [System.Drawing.Color]::FromArgb(74, 139, 230) }
+            elseif ($pointerInside) { $borderColor = [System.Drawing.Color]::FromArgb(157, 181, 211) }
+            else { $borderColor = [System.Drawing.Color]::FromArgb(210, 221, 235) }
+            $contentColor = [System.Drawing.Color]::FromArgb(35, 52, 76)
+        }
+        $surfaceBrush = [System.Drawing.SolidBrush]::new($surfaceColor)
         $graphics.FillPath($surfaceBrush, $path)
         $surfaceBrush.Dispose()
-        $focused = $Combo.Focused -or $Combo.DroppedDown
-        $pointerInside = $sender.ClientRectangle.Contains($sender.PointToClient([System.Windows.Forms.Control]::MousePosition))
-        if ($focused) { $borderColor = [System.Drawing.Color]::FromArgb(74, 139, 230) }
-        elseif ($pointerInside) { $borderColor = [System.Drawing.Color]::FromArgb(157, 181, 211) }
-        else { $borderColor = [System.Drawing.Color]::FromArgb(210, 221, 235) }
         $borderPen = [System.Drawing.Pen]::new($borderColor, 1)
         $graphics.DrawPath($borderPen, $path)
         $borderPen.Dispose()
         $path.Dispose()
-    }.GetNewClosure())
-    foreach ($control in @($frame, $Combo)) {
-        $control.Add_MouseEnter({ $frame.Invalidate() }.GetNewClosure())
-        $control.Add_MouseLeave({ $frame.Invalidate() }.GetNewClosure())
-        $control.Add_MouseMove({ $frame.Invalidate() }.GetNewClosure())
-        $control.Add_Enter({ $frame.Invalidate() }.GetNewClosure())
-        $control.Add_Leave({ $frame.Invalidate() }.GetNewClosure())
-    }
-    return $frame
-}
 
-function Set-ChoiceComboStyle($Combo, [string]$Kind) {
-    $Combo.DrawMode = 'OwnerDrawFixed'
-    $Combo.ItemHeight = 29
-    $Combo.IntegralHeight = $false
-    $Combo.DropDownHeight = 230
-    $choiceKind = $Kind
-    $Combo.Add_DrawItem({
-        param($sender, $eventArgs)
-        if ($eventArgs.Index -ge 0) { $choice = $sender.Items[$eventArgs.Index] } else { $choice = $sender.SelectedItem }
-        if ($null -eq $choice) { return }
-        $graphics = $eventArgs.Graphics
-        $selected = (($eventArgs.State -band [System.Windows.Forms.DrawItemState]::Selected) -ne 0)
-        $background = if ($selected) { [System.Drawing.Color]::FromArgb(239, 245, 253) } else { [System.Drawing.Color]::White }
-        $foreground = [System.Drawing.Color]::FromArgb(35, 52, 76)
-        $backgroundBrush = [System.Drawing.SolidBrush]::new($background)
-        $graphics.FillRectangle($backgroundBrush, $eventArgs.Bounds)
-        $backgroundBrush.Dispose()
-        $iconPen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(37, 99, 235), 1.7)
-        $iconPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round; $iconPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-        $iconX = $eventArgs.Bounds.X + 9
-        $iconY = $eventArgs.Bounds.Y + [int](($eventArgs.Bounds.Height - 16) / 2)
+        $iconColor = if ($sender.Enabled) { [System.Drawing.Color]::FromArgb(37, 99, 235) } else { $contentColor }
+        $iconPen = [System.Drawing.Pen]::new($iconColor, 1.7)
+        $iconPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $iconPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $iconX = 11
+        $iconY = [int](($sender.Height - 16) / 2)
         if ($choiceKind -eq 'drive') {
             $graphics.DrawRectangle($iconPen, $iconX, $iconY + 2, 18, 12)
             $graphics.DrawLine($iconPen, $iconX + 2, $iconY + 6, $iconX + 16, $iconY + 6)
-            $driveLightBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(37, 99, 235))
-            $graphics.FillEllipse($driveLightBrush, $iconX + 3, $iconY + 10, 2, 2); $graphics.FillEllipse($driveLightBrush, $iconX + 7, $iconY + 10, 2, 2)
+            $driveLightBrush = [System.Drawing.SolidBrush]::new($iconColor)
+            $graphics.FillEllipse($driveLightBrush, $iconX + 3, $iconY + 10, 2, 2)
+            $graphics.FillEllipse($driveLightBrush, $iconX + 7, $iconY + 10, 2, 2)
             $driveLightBrush.Dispose()
         } else {
             $graphics.DrawEllipse($iconPen, $iconX + 1, $iconY, 16, 16)
@@ -1517,51 +1513,50 @@ function Set-ChoiceComboStyle($Combo, [string]$Kind) {
             $graphics.DrawLine($iconPen, $iconX + 2, $iconY + 11, $iconX + 16, $iconY + 11)
         }
         $iconPen.Dispose()
-        $display = if ($choice -is [string]) { [string]$choice } else { [string]$choice.Display }
-        $textBrush = [System.Drawing.SolidBrush]::new($foreground)
-        $textFont = [System.Drawing.Font]::new('Segoe UI', 9.5)
-        $textBounds = [System.Drawing.RectangleF]::new([single]($eventArgs.Bounds.X + 36), [single]$eventArgs.Bounds.Y, [single]($eventArgs.Bounds.Width - 65), [single]$eventArgs.Bounds.Height)
-        $graphics.DrawString($display, $textFont, $textBrush, $textBounds, [System.Drawing.StringFormat]::GenericDefault)
-        $textFont.Dispose(); $textBrush.Dispose()
-        if ($selected) { $eventArgs.DrawFocusRectangle() }
+
+        $choice = $Combo.SelectedItem
+        if ($null -ne $choice) {
+            $display = if ($choice -is [string]) { [string]$choice } else { [string]$choice.Display }
+            $textBrush = [System.Drawing.SolidBrush]::new($contentColor)
+            $textFont = [System.Drawing.Font]::new('Segoe UI', 9.5)
+            $textBounds = [System.Drawing.RectangleF]::new(39, 0, [single]($sender.Width - 78), [single]$sender.Height)
+            $textFormat = [System.Drawing.StringFormat]::new()
+            $textFormat.LineAlignment = [System.Drawing.StringAlignment]::Center
+            $textFormat.Trimming = [System.Drawing.StringTrimming]::EllipsisCharacter
+            $graphics.DrawString($display, $textFont, $textBrush, $textBounds, $textFormat)
+            $textFormat.Dispose()
+            $textFont.Dispose()
+            $textBrush.Dispose()
+        }
+
+        $chevronColor = if ($sender.Enabled) { [System.Drawing.Color]::FromArgb(74, 101, 137) } else { $contentColor }
+        $chevronPen = [System.Drawing.Pen]::new($chevronColor, 1.8)
+        $chevronPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $chevronPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $centerX = [single]($sender.Width - 18)
+        $centerY = [single]($sender.Height / 2)
+        $graphics.DrawLines($chevronPen, [System.Drawing.PointF[]]@(
+            [System.Drawing.PointF]::new($centerX - 4, $centerY - 2),
+            [System.Drawing.PointF]::new($centerX, $centerY + 2),
+            [System.Drawing.PointF]::new($centerX + 4, $centerY - 2)
+        ))
+        $chevronPen.Dispose()
     }.GetNewClosure())
+    $button.Add_MouseEnter({ $button.Invalidate() }.GetNewClosure())
+    $button.Add_MouseLeave({ $button.Invalidate() }.GetNewClosure())
+    $button.Add_MouseMove({ $button.Invalidate() }.GetNewClosure())
+    $button.Add_Enter({ $button.Invalidate() }.GetNewClosure())
+    $button.Add_Leave({ $button.Invalidate() }.GetNewClosure())
+    $Combo.Add_SelectedIndexChanged({ $button.Invalidate() }.GetNewClosure())
+    $Combo.Add_EnabledChanged({ $button.Enabled = $Combo.Enabled; $button.Invalidate() }.GetNewClosure())
+    $Combo.Visible = $false
+    return $button
 }
 
-function New-ChoiceChevron($Combo) {
-    $arrow = [System.Windows.Forms.Button]::new()
-    $arrow.Size = [System.Drawing.Size]::new(27, 27)
-    $arrow.FlatStyle = 'Flat'
-    $arrow.FlatAppearance.BorderSize = 0
-    $arrow.BackColor = [System.Drawing.Color]::White
-    $arrow.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(239, 245, 253)
-    $arrow.FlatAppearance.MouseDownBackColor = [System.Drawing.Color]::FromArgb(226, 236, 250)
-    $arrow.ForeColor = [System.Drawing.Color]::FromArgb(74, 101, 137)
-    $arrow.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $arrow.TabStop = $false
-    $arrow.Add_Paint({
-        param($sender, $eventArgs)
-        $pen = [System.Drawing.Pen]::new($sender.ForeColor, 1.8)
-        $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round; $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-        $centerX = [single]($sender.Width / 2); $centerY = [single]($sender.Height / 2)
-        $eventArgs.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $eventArgs.Graphics.DrawLines($pen, [System.Drawing.PointF[]]@([System.Drawing.PointF]::new($centerX - 4, $centerY - 2), [System.Drawing.PointF]::new($centerX, $centerY + 2), [System.Drawing.PointF]::new($centerX + 4, $centerY - 2)))
-        $pen.Dispose()
-    })
-    $arrow.Add_Click({ if ($Combo.Enabled) { $Combo.DroppedDown = $true } }.GetNewClosure())
-    return $arrow
-}
-
-Set-ChoiceComboStyle $driveCombo 'drive'
-Set-ChoiceComboStyle $languageCombo 'language'
-$driveChoiceFrame = New-ChoiceFrame $driveCombo
-$languageChoiceFrame = New-ChoiceFrame $languageCombo
-$driveChevron = New-ChoiceChevron $driveCombo
-$languageChevron = New-ChoiceChevron $languageCombo
-$driveChoiceFrame.Controls.Add($driveChevron)
-$languageChoiceFrame.Controls.Add($languageChevron)
-$sidebar.Controls.Add($driveChoiceFrame)
-$sidebar.Controls.Add($languageChoiceFrame)
-$driveChevron.BringToFront(); $languageChevron.BringToFront()
+$driveSelectorButton = New-ChoiceSelectorButton $driveCombo 'drive' (T 'drive_section')
+$languageSelectorButton = New-ChoiceSelectorButton $languageCombo 'language' (T 'language_label')
+$sidebar.Controls.Add($driveSelectorButton)
+$sidebar.Controls.Add($languageSelectorButton)
 
 $adviceText = [System.Windows.Forms.RichTextBox]::new()
 $adviceText.ReadOnly = $true
@@ -1654,14 +1649,12 @@ function Update-WindowLayout {
     $statusPanel.Size = [System.Drawing.Size]::new([Math]::Max(300, $clientWidth - 270), 54)
     $statusLabel.Size = [System.Drawing.Size]::new([Math]::Max(240, $statusPanel.ClientSize.Width - 44), 24)
     $driveCaption.Location = [System.Drawing.Point]::new(18, $clientHeight - 198)
-    $driveChoiceFrame.Location = [System.Drawing.Point]::new(14, $clientHeight - 177)
-    $driveChoiceFrame.Size = [System.Drawing.Size]::new(242, 42)
+    $driveSelectorButton.Location = [System.Drawing.Point]::new(14, $clientHeight - 177)
+    $driveSelectorButton.Size = [System.Drawing.Size]::new(242, 42)
     $driveInfoLabel.Location = [System.Drawing.Point]::new(18, $clientHeight - 137)
     $languageLabel.Location = [System.Drawing.Point]::new(18, $clientHeight - 82)
-    $languageChoiceFrame.Location = [System.Drawing.Point]::new(14, $clientHeight - 63)
-    $languageChoiceFrame.Size = [System.Drawing.Size]::new(242, 42)
-    $driveChevron.Location = [System.Drawing.Point]::new($driveCombo.Left + $driveCombo.Width - 30, 7)
-    $languageChevron.Location = [System.Drawing.Point]::new($languageCombo.Left + $languageCombo.Width - 30, 7)
+    $languageSelectorButton.Location = [System.Drawing.Point]::new(14, $clientHeight - 63)
+    $languageSelectorButton.Size = [System.Drawing.Size]::new(242, 42)
 }
 
 $script:ActiveMarkerTargetY = $navApps.Top + 7
@@ -1789,8 +1782,9 @@ $script:ScanTimer.Add_Tick({
     $script:ScanTimer.Stop()
     $finishedKind = $script:PendingKind
     $finishedTask = $script:PendingTask
+    $repeatCleanup = $script:QueuedCleanupScan
+    $repeatDrive = $script:QueuedDriveScan
     $driveCombo.Enabled = $true
-    $driveChevron.Enabled = $true
     $appsRefreshButton.Enabled = $true
     if ($script:PendingKind -eq 'cleanup') { $cleanupRefreshButton.Enabled = $true; $cleanSelectedButton.Enabled = $true }
     if ($script:PendingKind -eq 'drive') { $scanDriveButton.Enabled = $true }
@@ -1799,11 +1793,11 @@ $script:ScanTimer.Add_Tick({
     if ($finishedTask.IsFaulted) {
         $statusLabel.Text = (T 'scan_error') -f $finishedTask.Exception.GetBaseException().Message
     } elseif ($finishedKind -eq 'cleanup') {
-        Render-CleanupRows $finishedTask.Result
-        $statusLabel.Text = T 'cleanup_done'
+        if ($repeatCleanup) { $statusLabel.Text = T 'scan_queued' }
+        else { Render-CleanupRows $finishedTask.Result; $statusLabel.Text = T 'cleanup_done' }
     } elseif ($finishedKind -eq 'drive') {
-        Render-DriveScan $finishedTask.Result
-        $statusLabel.Text = T 'drive_done'
+        if ($repeatDrive) { $statusLabel.Text = T 'scan_queued' }
+        else { Render-DriveScan $finishedTask.Result; $statusLabel.Text = T 'drive_done' }
         $cleanupRefreshButton.Enabled = $true
     } elseif ($finishedKind -eq 'appSizes') {
         $results = $finishedTask.Result
@@ -1823,12 +1817,22 @@ $script:ScanTimer.Add_Tick({
     }
     $script:PendingTask = $null
     $script:PendingKind = ''
-    if ($finishedKind -in @('cleanup', 'drive')) { Start-NextStartupScan }
+    if ($script:QueuedCleanupScan) {
+        $script:QueuedCleanupScan = $false
+        Start-CleanupEstimate
+    } elseif ($script:QueuedDriveScan) {
+        $script:QueuedDriveScan = $false
+        if ($script:StartupScanQueue.Count -gt 0 -and [string]$script:StartupScanQueue.Peek() -eq 'drive') { [void]$script:StartupScanQueue.Dequeue() }
+        Start-DriveScan
+    } elseif ($finishedKind -in @('cleanup', 'drive')) { Start-NextStartupScan }
 })
 
 $driveCombo.Add_SelectedIndexChanged({
     Refresh-DriveState
-    if ($tabs.SelectedTab -eq $cleanupTab) { Start-CleanupEstimate }
+    if ($script:PendingTask -and -not $script:PendingTask.IsCompleted) {
+        if ($script:PendingKind -eq 'cleanup' -or $tabs.SelectedTab -eq $cleanupTab) { $script:QueuedCleanupScan = $true; $statusLabel.Text = T 'scan_queued' }
+        elseif ($script:PendingKind -eq 'drive' -or $tabs.SelectedTab -eq $largeTab) { $script:QueuedDriveScan = $true; $statusLabel.Text = T 'scan_queued' }
+    } elseif ($tabs.SelectedTab -eq $cleanupTab) { Start-CleanupEstimate }
     elseif ($tabs.SelectedTab -eq $largeTab) { Start-DriveScan }
 })
 $tabs.Add_SelectedIndexChanged({
