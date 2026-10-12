@@ -1421,6 +1421,68 @@ $driveCombo.DisplayMember = 'Display'
 $driveCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
 $languageCombo.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
 
+function Set-ChoiceComboRoundRegion($Combo) {
+    if ($Combo.Width -lt 20 -or $Combo.Height -lt 20) { return }
+    $radius = 9
+    $diameter = $radius * 2
+    $path = [System.Drawing.Drawing2D.GraphicsPath]::new()
+    $path.AddArc(0, 0, $diameter, $diameter, 180, 90)
+    $path.AddArc($Combo.Width - $diameter - 1, 0, $diameter, $diameter, 270, 90)
+    $path.AddArc($Combo.Width - $diameter - 1, $Combo.Height - $diameter - 1, $diameter, $diameter, 0, 90)
+    $path.AddArc(0, $Combo.Height - $diameter - 1, $diameter, $diameter, 90, 90)
+    $path.CloseFigure()
+    $newRegion = [System.Drawing.Region]::new($path)
+    $path.Dispose()
+    if ($Combo.Region) { $Combo.Region.Dispose() }
+    $Combo.Region = $newRegion
+}
+
+function New-ChoiceFrame($Combo) {
+    $frame = [System.Windows.Forms.Panel]::new()
+    $frame.Size = [System.Drawing.Size]::new(242, 42)
+    $frame.BackColor = [System.Drawing.Color]::FromArgb(21, 34, 53)
+    $frame.Tag = $false
+    $Combo.Location = [System.Drawing.Point]::new(3, 3)
+    $Combo.Size = [System.Drawing.Size]::new(236, 36)
+    $frame.Controls.Add($Combo)
+    $Combo.Add_SizeChanged({ Set-ChoiceComboRoundRegion $Combo }.GetNewClosure())
+    Set-ChoiceComboRoundRegion $Combo
+    $frame.Add_Paint({
+        param($sender, $eventArgs)
+        $graphics = $eventArgs.Graphics
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $bounds = [System.Drawing.Rectangle]::new(0, 0, $sender.Width - 1, $sender.Height - 1)
+        $radius = 11
+        $diameter = $radius * 2
+        $path = [System.Drawing.Drawing2D.GraphicsPath]::new()
+        $path.AddArc($bounds.X, $bounds.Y, $diameter, $diameter, 180, 90)
+        $path.AddArc($bounds.Right - $diameter, $bounds.Y, $diameter, $diameter, 270, 90)
+        $path.AddArc($bounds.Right - $diameter, $bounds.Bottom - $diameter, $diameter, $diameter, 0, 90)
+        $path.AddArc($bounds.X, $bounds.Bottom - $diameter, $diameter, $diameter, 90, 90)
+        $path.CloseFigure()
+        $surfaceBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
+        $graphics.FillPath($surfaceBrush, $path)
+        $surfaceBrush.Dispose()
+        $focused = $Combo.Focused -or $Combo.DroppedDown
+        $pointerInside = $sender.ClientRectangle.Contains($sender.PointToClient([System.Windows.Forms.Control]::MousePosition))
+        if ($focused) { $borderColor = [System.Drawing.Color]::FromArgb(74, 139, 230) }
+        elseif ($pointerInside) { $borderColor = [System.Drawing.Color]::FromArgb(157, 181, 211) }
+        else { $borderColor = [System.Drawing.Color]::FromArgb(210, 221, 235) }
+        $borderPen = [System.Drawing.Pen]::new($borderColor, 1)
+        $graphics.DrawPath($borderPen, $path)
+        $borderPen.Dispose()
+        $path.Dispose()
+    }.GetNewClosure())
+    foreach ($control in @($frame, $Combo)) {
+        $control.Add_MouseEnter({ $frame.Invalidate() }.GetNewClosure())
+        $control.Add_MouseLeave({ $frame.Invalidate() }.GetNewClosure())
+        $control.Add_MouseMove({ $frame.Invalidate() }.GetNewClosure())
+        $control.Add_Enter({ $frame.Invalidate() }.GetNewClosure())
+        $control.Add_Leave({ $frame.Invalidate() }.GetNewClosure())
+    }
+    return $frame
+}
+
 function Set-ChoiceComboStyle($Combo, [string]$Kind) {
     $Combo.DrawMode = 'OwnerDrawFixed'
     $Combo.ItemHeight = 29
@@ -1433,8 +1495,8 @@ function Set-ChoiceComboStyle($Combo, [string]$Kind) {
         if ($null -eq $choice) { return }
         $graphics = $eventArgs.Graphics
         $selected = (($eventArgs.State -band [System.Windows.Forms.DrawItemState]::Selected) -ne 0)
-        $background = if ($selected) { [System.Drawing.Color]::FromArgb(235, 243, 255) } else { [System.Drawing.Color]::White }
-        $foreground = [System.Drawing.Color]::FromArgb(31, 41, 55)
+        $background = if ($selected) { [System.Drawing.Color]::FromArgb(239, 245, 253) } else { [System.Drawing.Color]::White }
+        $foreground = [System.Drawing.Color]::FromArgb(35, 52, 76)
         $backgroundBrush = [System.Drawing.SolidBrush]::new($background)
         $graphics.FillRectangle($backgroundBrush, $eventArgs.Bounds)
         $backgroundBrush.Dispose()
@@ -1471,7 +1533,9 @@ function New-ChoiceChevron($Combo) {
     $arrow.FlatStyle = 'Flat'
     $arrow.FlatAppearance.BorderSize = 0
     $arrow.BackColor = [System.Drawing.Color]::White
-    $arrow.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
+    $arrow.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(239, 245, 253)
+    $arrow.FlatAppearance.MouseDownBackColor = [System.Drawing.Color]::FromArgb(226, 236, 250)
+    $arrow.ForeColor = [System.Drawing.Color]::FromArgb(74, 101, 137)
     $arrow.Cursor = [System.Windows.Forms.Cursors]::Hand
     $arrow.TabStop = $false
     $arrow.Add_Paint({
@@ -1489,10 +1553,14 @@ function New-ChoiceChevron($Combo) {
 
 Set-ChoiceComboStyle $driveCombo 'drive'
 Set-ChoiceComboStyle $languageCombo 'language'
+$driveChoiceFrame = New-ChoiceFrame $driveCombo
+$languageChoiceFrame = New-ChoiceFrame $languageCombo
 $driveChevron = New-ChoiceChevron $driveCombo
 $languageChevron = New-ChoiceChevron $languageCombo
-$sidebar.Controls.Add($driveChevron)
-$sidebar.Controls.Add($languageChevron)
+$driveChoiceFrame.Controls.Add($driveChevron)
+$languageChoiceFrame.Controls.Add($languageChevron)
+$sidebar.Controls.Add($driveChoiceFrame)
+$sidebar.Controls.Add($languageChoiceFrame)
 $driveChevron.BringToFront(); $languageChevron.BringToFront()
 
 $adviceText = [System.Windows.Forms.RichTextBox]::new()
@@ -1586,14 +1654,14 @@ function Update-WindowLayout {
     $statusPanel.Size = [System.Drawing.Size]::new([Math]::Max(300, $clientWidth - 270), 54)
     $statusLabel.Size = [System.Drawing.Size]::new([Math]::Max(240, $statusPanel.ClientSize.Width - 44), 24)
     $driveCaption.Location = [System.Drawing.Point]::new(18, $clientHeight - 198)
-    $driveCombo.Location = [System.Drawing.Point]::new(14, $clientHeight - 174)
-    $driveCombo.Size = [System.Drawing.Size]::new(242, 36)
+    $driveChoiceFrame.Location = [System.Drawing.Point]::new(14, $clientHeight - 177)
+    $driveChoiceFrame.Size = [System.Drawing.Size]::new(242, 42)
     $driveInfoLabel.Location = [System.Drawing.Point]::new(18, $clientHeight - 137)
     $languageLabel.Location = [System.Drawing.Point]::new(18, $clientHeight - 82)
-    $languageCombo.Location = [System.Drawing.Point]::new(14, $clientHeight - 60)
-    $languageCombo.Size = [System.Drawing.Size]::new(242, 36)
-    $driveChevron.Location = [System.Drawing.Point]::new($driveCombo.Left + $driveCombo.Width - 30, $driveCombo.Top + 4)
-    $languageChevron.Location = [System.Drawing.Point]::new($languageCombo.Left + $languageCombo.Width - 30, $languageCombo.Top + 4)
+    $languageChoiceFrame.Location = [System.Drawing.Point]::new(14, $clientHeight - 63)
+    $languageChoiceFrame.Size = [System.Drawing.Size]::new(242, 42)
+    $driveChevron.Location = [System.Drawing.Point]::new($driveCombo.Left + $driveCombo.Width - 30, 7)
+    $languageChevron.Location = [System.Drawing.Point]::new($languageCombo.Left + $languageCombo.Width - 30, 7)
 }
 
 $script:ActiveMarkerTargetY = $navApps.Top + 7
